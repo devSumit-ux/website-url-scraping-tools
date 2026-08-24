@@ -10,57 +10,61 @@ export async function GET(
   try {
     const { id } = await params;
     const job = getJob(id);
-    if (!job) {
-      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
-    }
 
-    let currentStatus = job.status;
-    let candidates = job.candidates;
-    let processed = job.processed;
-    let accepted = job.accepted;
+    let currentStatus = job?.status || 'searching';
+    let candidates = job?.candidates || 0;
+    let processed = job?.processed || 0;
+    let accepted = job?.accepted || 0;
     let etaSeconds: number | null = null;
     let rate = 0;
+    let error = job?.error;
 
-    if (job.status !== 'completed' && job.status !== 'failed') {
-      try {
-        const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/progress/${job.id}`, { cache: 'no-store' });
-        if (pyRes.ok) {
-          const pyData = await pyRes.json();
-          if (pyData.candidates !== undefined) candidates = Math.max(candidates, pyData.candidates);
-          if (pyData.processed !== undefined) processed = Math.max(processed, pyData.processed);
-          if (pyData.accepted !== undefined) accepted = Math.max(accepted, pyData.accepted);
-          if (pyData.eta_seconds !== undefined) etaSeconds = pyData.eta_seconds;
-          if (pyData.rate !== undefined) rate = pyData.rate;
-          if (pyData.status) {
-            currentStatus = pyData.status;
+    try {
+      const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/progress/${id}`, { cache: 'no-store' });
+      if (pyRes.ok) {
+        const pyData = await pyRes.json();
+        if (pyData.candidates !== undefined) candidates = Math.max(candidates, pyData.candidates);
+        if (pyData.processed !== undefined) processed = Math.max(processed, pyData.processed);
+        if (pyData.accepted !== undefined) accepted = Math.max(accepted, pyData.accepted);
+        if (pyData.eta_seconds !== undefined) etaSeconds = pyData.eta_seconds;
+        if (pyData.rate !== undefined) rate = pyData.rate;
+        if (pyData.error) error = pyData.error;
+        if (pyData.status) {
+          currentStatus = pyData.status;
+          if (job) {
             updateJob(job.id, {
               status: pyData.status,
               candidates,
               processed,
               accepted,
+              error,
               completedAt: pyData.status === 'completed' || pyData.status === 'failed' ? new Date().toISOString() : undefined,
             });
           }
         }
-      } catch {}
+      }
+    } catch {}
+
+    if (!job && currentStatus === 'not_found') {
+      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
     }
 
     return NextResponse.json({
-      id: job.id,
+      id,
       status: currentStatus,
-      requested: job.accepted + job.blocked + job.duplicates + job.failed,
+      requested: (job?.accepted || 0) + (job?.blocked || 0) + (job?.duplicates || 0) + (job?.failed || 0),
       candidates,
       processed,
       accepted,
-      blocked: job.blocked,
-      duplicates: job.duplicates,
-      failed: job.failed,
+      blocked: job?.blocked || Math.max(0, processed - accepted),
+      duplicates: job?.duplicates || 0,
+      failed: job?.failed || 0,
       etaSeconds,
       rate,
-      error: job.error,
-      createdAt: job.createdAt,
-      startedAt: job.startedAt,
-      completedAt: job.completedAt,
+      error,
+      createdAt: job?.createdAt || new Date().toISOString(),
+      startedAt: job?.startedAt,
+      completedAt: job?.completedAt,
     });
   } catch {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

@@ -35,7 +35,7 @@ export async function GET(
       try {
         const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/results/${id}`, {
           cache: 'no-store',
-          signal: AbortSignal.timeout(5000)
+          signal: AbortSignal.timeout(10000)
         });
         if (pyRes.ok) {
           const pyData = await pyRes.json();
