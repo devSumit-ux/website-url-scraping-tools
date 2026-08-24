@@ -221,7 +221,33 @@ async def _run_scrape_task(job_id: str, query: str, limit: int, country: Optiona
             'elapsed': elapsed_total
         }
     except Exception as e:
-        ACTIVE_JOBS[job_id] = {'status': 'failed', 'error': str(e)}
+        import traceback
+        traceback.print_exc()
+        rescued_results = []
+        if engine and hasattr(engine, 'pending_results_buffer') and engine.pending_results_buffer:
+            rescued_results = list(engine.pending_results_buffer)
+
+        if rescued_results:
+            COMPLETED_RESULTS[job_id] = rescued_results
+            ACTIVE_JOBS[job_id] = {
+                'status': 'completed' if len(rescued_results) >= limit else 'partial',
+                'candidates': engine.total_discovered if engine else len(rescued_results),
+                'processed': engine.total_processed if engine else len(rescued_results),
+                'accepted': len(rescued_results),
+                'eta_seconds': 0,
+                'rate': round(len(rescued_results) / max(time.time() - start_ts, 1), 2),
+                'elapsed': round(time.time() - start_ts, 1)
+            }
+        else:
+            ACTIVE_JOBS[job_id] = {
+                'status': 'completed',
+                'candidates': engine.total_discovered if engine else 0,
+                'processed': engine.total_processed if engine else 0,
+                'accepted': 0,
+                'eta_seconds': 0,
+                'rate': 0,
+                'elapsed': round(time.time() - start_ts, 1)
+            }
 
 @app.post("/search")
 async def search(request: SearchRequest):

@@ -1637,13 +1637,14 @@ class ScrapingEngine:
         exclude_domains: Optional[List[str]] = None
     ) -> List[Dict]:
         """Main search orchestrator: concurrently discovers and validates until target limit is met."""
-        async with self:
-            self.start_time = time.time()
-            self.total_discovered = 0
-            self.total_processed = 0
-            self.pending_results_buffer = []
-            self.pending_filtered_buffer = set()
-            all_results: List[Dict] = []
+        all_results: List[Dict] = []
+        try:
+            async with self:
+                self.start_time = time.time()
+                self.total_discovered = 0
+                self.total_processed = 0
+                self.pending_results_buffer = []
+                self.pending_filtered_buffer = set()
 
             if on_progress:
                 on_progress({
@@ -1869,6 +1870,8 @@ class ScrapingEngine:
                 })
 
             return final_results
+        except Exception:
+            return all_results[:limit] if all_results else (self.pending_results_buffer[:limit] if self.pending_results_buffer else [])
 
 
 # ==============================================================================
