@@ -87,9 +87,9 @@ export function SearchProgress({
           <button
             type="button"
             onClick={onCancel}
-            className="px-3 py-1.5 text-xs font-medium border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            className="px-3.5 py-1.5 text-xs font-medium border border-border rounded-md hover:bg-muted text-foreground bg-background transition-colors"
           >
-            Cancel / Reset
+            {status === 'failed' || status === 'cancelled' ? 'New Search' : 'Cancel / Reset'}
           </button>
         )}
       </div>

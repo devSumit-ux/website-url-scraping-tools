@@ -99,7 +99,7 @@ export default function Home() {
     setIsSearching(false);
     setJobId(null);
     setProgress({
-      status: 'cancelled',
+      status: 'idle',
       candidates: 0,
       processed: 0,
       accepted: 0,
