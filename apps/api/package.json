@@ -1,0 +1,37 @@
+{
+  "name": "webscope-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:generate": "prisma migrate dev --name init",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "worker:discovery": "tsx src/workers/discovery-worker.ts",
+    "worker:validation": "tsx src/workers/validation-worker.ts",
+    "worker:metadata": "tsx src/workers/metadata-worker.ts",
+    "worker:safety": "tsx src/workers/safety-worker.ts",
+    "worker:ranking": "tsx src/workers/ranking-worker.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "@fastify/jwt": "^9.0.0",
+    "@prisma/client": "^6.0.0",
+    "bullmq": "^5.0.0",
+    "cheerio": "^1.0.0",
+    "fastify": "^5.0.0",
+    "ioredis": "^5.0.0",
+    "undici": "^7.0.0",
+    "zod": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/cheerio": "^1.0.0",
+    "prisma": "^6.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
