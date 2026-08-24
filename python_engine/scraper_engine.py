@@ -1517,7 +1517,7 @@ class ScrapingEngine:
                         async with self.session.get(
                             target_url,
                             headers=req_headers,
-                            timeout=aiohttp.ClientTimeout(total=2.5, connect=1.0, sock_connect=1.0, sock_read=1.5),
+                            timeout=aiohttp.ClientTimeout(total=4.5, connect=2.0, sock_connect=2.0, sock_read=2.5),
                             ssl=False,
                             allow_redirects=True
                         ) as resp:
@@ -1542,13 +1542,13 @@ class ScrapingEngine:
                 status_code, content_type, html = valid_result_data
                 response_time = time.time() - start
 
-                if not html or len(html.strip()) < 100:
+                if not html or len(html.strip()) < 80:
                     return _reject()
 
                 if self.checker.is_parked_domain(html) or self.checker.is_restricted_page(html) or self.checker.is_adult_content(html) or self.checker.is_thin_content(html):
                     return _reject()
 
-                # Must strictly respond with HTTP 200 (live and accessible from India)
+                # Must strictly respond with HTTP 200
                 if status_code != 200:
                     return _reject(domain)
 
@@ -1567,20 +1567,12 @@ class ScrapingEngine:
                 if any(jt in t_lower for jt in junk_title_stems):
                     return _reject(domain)
 
-                # Strictly reject if title/description indicates a famous company or mega conglomerate presence
-                if self.checker.is_famous_presence(title, description, domain):
-                    return _reject(domain)
-
                 word_count = self.checker.count_words(html)
                 links = self.checker.extract_links(html, primary_url)
 
-                # Strictly reject if page exhibits high-traffic ad networks, conglomerate media footprints, or mega portal link density
-                if self.checker.is_high_traffic_or_mega_portal(html, len(links)):
+                if not raw_title and word_count < 30:
                     return _reject(domain)
-
-                if not raw_title and word_count < 45:
-                    return _reject(domain)
-                if word_count < 40:
+                if word_count < 25:
                     return _reject(domain)
 
                 authority = self.checker.calculate_authority_score(
