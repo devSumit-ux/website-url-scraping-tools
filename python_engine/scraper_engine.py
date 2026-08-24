@@ -1485,163 +1485,142 @@ class ScrapingEngine:
                 }
 
                 candidates_to_try = [f"https://www.{domain}/", f"https://{domain}/", f"http://{domain}/"]
-                response = None
+                valid_result_data = None
+
                 for target_url in candidates_to_try:
                     try:
-                        resp_ctx = self.session.get(
+                        async with self.session.get(
                             target_url,
                             headers=req_headers,
-                            timeout=aiohttp.ClientTimeout(total=2.0, connect=0.8, sock_connect=0.8, sock_read=1.2),
+                            timeout=aiohttp.ClientTimeout(total=2.5, connect=1.0, sock_connect=1.0, sock_read=1.5),
                             ssl=False,
                             allow_redirects=True
-                        )
-                        r_obj = await resp_ctx.__aenter__()
-                        if r_obj.status not in [404, 410, 500, 502, 503, 504]:
-                            response = r_obj
-                            break
-                        else:
-                            await r_obj.release()
+                        ) as resp:
+                            if resp.status not in [404, 410, 500, 502, 503, 504]:
+                                if resp.url and resp.url.host:
+                                    resp_host = resp.url.host.lower().strip()
+                                    if resp_host != domain and resp_host != f"www.{domain}":
+                                        return _reject(domain)
+
+                                raw = await resp.read()
+                                html = raw.decode('utf-8', errors='ignore')[:35000]
+                                c_type = resp.headers.get('Content-Type', '')
+                                status_code = resp.status
+                                valid_result_data = (status_code, c_type, html)
+                                break
                     except Exception:
                         continue
 
-                if not response:
+                if not valid_result_data:
                     return _reject()
 
-                try:
-                    response_time = time.time() - start
+                status_code, content_type, html = valid_result_data
+                response_time = time.time() - start
 
-                    # Disallow cross-domain redirects or redirects to forbidden platforms
-                    if response.history:
-                        for h in response.history:
-                            if h.url and h.url.host:
-                                h_d = self.validator.extract_root_domain(h.url.host)
-                                if h_d and (h_d != domain or h_d in self.history_domains):
-                                    _reject(h_d)
-                                    return _reject(domain)
+                if not html or len(html.strip()) < 100:
+                    return _reject()
 
-                    if response.url and response.url.host:
-                        resp_host = response.url.host.lower().strip()
-                        if resp_host != domain and resp_host != f"www.{domain}":
-                            return _reject(domain)
+                if self.checker.is_parked_domain(html) or self.checker.is_restricted_page(html) or self.checker.is_adult_content(html) or self.checker.is_thin_content(html):
+                    return _reject()
 
-                    try:
-                        raw = await response.read()
-                        html = raw.decode('utf-8', errors='ignore')[:35000]
-                    except Exception:
-                        return _reject()
+                # Must strictly respond with HTTP 200 (live and accessible from India)
+                if status_code != 200:
+                    return _reject(domain)
 
-                    if not html or len(html.strip()) < 100:
-                        return _reject()
+                raw_title = self.checker.extract_title(html)
+                title = raw_title.strip() if raw_title else domain.capitalize()
+                description = self.checker.extract_description(html)
 
-                    content_type = response.headers.get('Content-Type', '')
+                # Strictly reject if title indicates a blocked, captive portal, or server error state
+                junk_title_stems = [
+                    'blocked', 'access denied', '403 forbidden', '404 not found',
+                    '502 bad gateway', '503 service unavailable', 'just a moment',
+                    'attention required', 'suspended', 'default page', 'under construction',
+                    'coming soon', 'parked domain', 'site not found', 'site can’t be reached'
+                ]
+                t_lower = title.lower()
+                if any(jt in t_lower for jt in junk_title_stems):
+                    return _reject(domain)
 
-                    if self.checker.is_parked_domain(html) or self.checker.is_restricted_page(html) or self.checker.is_adult_content(html) or self.checker.is_thin_content(html):
-                        return _reject()
+                # Strictly reject if title/description indicates a famous company or mega conglomerate presence
+                if self.checker.is_famous_presence(title, description, domain):
+                    return _reject(domain)
 
-                    # Must strictly respond with HTTP 200 (live and accessible from India)
-                    if response.status != 200:
-                        return _reject(domain)
+                word_count = self.checker.count_words(html)
+                links = self.checker.extract_links(html, primary_url)
 
-                    raw_title = self.checker.extract_title(html)
-                    title = raw_title.strip() if raw_title else domain.capitalize()
-                    description = self.checker.extract_description(html)
+                # Strictly reject if page exhibits high-traffic ad networks, conglomerate media footprints, or mega portal link density
+                if self.checker.is_high_traffic_or_mega_portal(html, len(links)):
+                    return _reject(domain)
 
-                    # Strictly reject if title indicates a blocked, captive portal, or server error state
-                    junk_title_stems = [
-                        'blocked', 'access denied', '403 forbidden', '404 not found',
-                        '502 bad gateway', '503 service unavailable', 'just a moment',
-                        'attention required', 'suspended', 'default page', 'under construction',
-                        'coming soon', 'parked domain', 'site not found', 'site can’t be reached'
-                    ]
-                    t_lower = title.lower()
-                    if any(jt in t_lower for jt in junk_title_stems):
-                        return _reject(domain)
+                if not raw_title and word_count < 45:
+                    return _reject(domain)
+                if word_count < 40:
+                    return _reject(domain)
 
-                    # Strictly reject if title/description indicates a famous company or mega conglomerate presence
-                    if self.checker.is_famous_presence(title, description, domain):
-                        return _reject(domain)
+                authority = self.checker.calculate_authority_score(
+                    domain, status_code, response_time, word_count
+                )
 
-                    word_count = self.checker.count_words(html)
-                    links = self.checker.extract_links(html, primary_url)
+                relevance = self._calculate_relevance(title, description, html, query, area=area)
+                if query and query.strip() and relevance < 10.0:
+                    return _reject()
 
-                    # Strictly reject if page exhibits high-traffic ad networks, conglomerate media footprints, or mega portal link density
-                    if self.checker.is_high_traffic_or_mega_portal(html, len(links)):
-                        return _reject(domain)
+                pub_date = self.checker.extract_date(html)
 
-                    if not raw_title and word_count < 45:
-                        return _reject(domain)
-                    if word_count < 40:
-                        return _reject(domain)
-
-                    authority = self.checker.calculate_authority_score(
-                        domain, response.status, response_time, word_count
-                    )
-
-                    relevance = self._calculate_relevance(title, description, html, query, area=area)
-                    if query and query.strip() and relevance < 10.0:
-                        return _reject()
-
-                    pub_date = self.checker.extract_date(html)
-
-                    # Time frame filtering if requested
-                    if time_frame and time_frame in ['d', 'w', 'm', 'y']:
-                        whois_date = await self.checker.get_whois_creation_date(domain)
-                        if whois_date:
-                            try:
-                                w_dt = datetime.strptime(whois_date, '%Y-%m-%d').replace(tzinfo=timezone.utc)
-                                whois_age_days = (datetime.now(timezone.utc) - w_dt).total_seconds() / 86400.0
-                                max_days = {'d': 365.0, 'w': 365.0, 'm': 365.0, 'y': 370.0}.get(time_frame, 370.0)
-                                if whois_age_days > max_days:
-                                    return _reject()
-                            except Exception:
-                                pass
-
-                    self.used_domains.add(domain)
-                    self.history_domains.add(domain)
-                    self.history_urls.add(clean_root_url)
-
-                    final_output_url = f"https://www.{domain}"
-
-                    result = ScrapedResult(
-                        url=final_output_url,
-                        domain=domain,
-                        title=title,
-                        description=description,
-                        content_type=content_type or 'webpage',
-                        authority_score=authority,
-                        relevance_score=relevance,
-                        status_code=response.status,
-                        is_alive=True,
-                        published_at=pub_date,
-                        modified_at=None,
-                        word_count=word_count,
-                        links_found=len(links),
-                    )
-
-                    await GlobalDomainRegistry.mark_delivered(final_output_url, domain, query)
-
-                    # Extract outlinks for recursive dynamic discovery
-                    for lk in links[:20]:
-                        ext_d = self.validator.extract_root_domain(lk)
-                        if ext_d and ext_d not in self.used_domains and ext_d not in self.history_domains and self.validator.is_authorized(ext_d, country=country, tld=tld):
-                            norm_link = f"https://www.{ext_d}"
-                            if norm_link not in self.seen_urls and norm_link not in self.history_urls:
-                                self.dynamic_candidates.add(norm_link)
-                                if on_candidate_found:
-                                    try:
-                                        res = on_candidate_found(norm_link)
-                                        if asyncio.iscoroutine(res):
-                                            asyncio.create_task(res)
-                                    except Exception:
-                                        pass
-
-                    return result
-                finally:
-                    if response:
+                # Time frame filtering if requested
+                if time_frame and time_frame in ['d', 'w', 'm', 'y']:
+                    whois_date = await self.checker.get_whois_creation_date(domain)
+                    if whois_date:
                         try:
-                            await response.release()
+                            w_dt = datetime.strptime(whois_date, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                            whois_age_days = (datetime.now(timezone.utc) - w_dt).total_seconds() / 86400.0
+                            max_days = {'d': 365.0, 'w': 365.0, 'm': 365.0, 'y': 370.0}.get(time_frame, 370.0)
+                            if whois_age_days > max_days:
+                                return _reject()
                         except Exception:
                             pass
+
+                self.used_domains.add(domain)
+                self.history_domains.add(domain)
+                self.history_urls.add(clean_root_url)
+
+                final_output_url = f"https://www.{domain}"
+
+                result = ScrapedResult(
+                    url=final_output_url,
+                    domain=domain,
+                    title=title,
+                    description=description,
+                    content_type=content_type or 'webpage',
+                    authority_score=authority,
+                    relevance_score=relevance,
+                    status_code=status_code,
+                    is_alive=True,
+                    published_at=pub_date,
+                    modified_at=None,
+                    word_count=word_count,
+                    links_found=len(links),
+                )
+
+                await GlobalDomainRegistry.mark_delivered(final_output_url, domain, query)
+
+                # Extract outlinks for recursive dynamic discovery
+                for lk in links[:20]:
+                    ext_d = self.validator.extract_root_domain(lk)
+                    if ext_d and ext_d not in self.used_domains and ext_d not in self.history_domains and self.validator.is_authorized(ext_d, country=country, tld=tld):
+                        norm_link = f"https://www.{ext_d}"
+                        if norm_link not in self.seen_urls and norm_link not in self.history_urls:
+                            self.dynamic_candidates.add(norm_link)
+                            if on_candidate_found:
+                                try:
+                                    res = on_candidate_found(norm_link)
+                                    if asyncio.iscoroutine(res):
+                                        asyncio.create_task(res)
+                                except Exception:
+                                    pass
+
+                return result
             except Exception:
                 return _reject()
 
