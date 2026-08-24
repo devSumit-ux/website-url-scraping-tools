@@ -943,7 +943,7 @@ class GlobalDomainRegistry:
     def initialize(cls):
         if not cls._initialized:
             history = HistoryLogger.load_history()
-            cls._delivered_domains = set(history.get('domains', [])) | set(history.get('filtered_domains', []))
+            cls._delivered_domains = set(history.get('domains', []))
             cls._delivered_urls = set(history.get('urls', []))
             cls._initialized = True
 
@@ -988,15 +988,13 @@ class GlobalDomainRegistry:
 
     @classmethod
     async def release_domain(cls, domain: str, is_filtered: bool = False):
-        """Release domain if invalid/dead or mark as filtered."""
+        """Release domain if invalid/dead or not accepted so other searches can evaluate it."""
         cls.initialize()
         if not domain:
             return
         d = domain.lower().strip()
         async with cls._lock:
             cls._in_flight_domains.discard(d)
-            if is_filtered:
-                cls._delivered_domains.add(d)
 
     @classmethod
     def clear(cls):
@@ -1062,32 +1060,48 @@ class SearchProviders:
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
             }
-            first = random.choice([0, 1, 2])
-            async with session.get(
-                f'https://www.bing.com/search?q={urllib.parse.quote(query)}{time_filter}&setlang=en-US&first={first}',
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=2.2)
-            ) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    for match in re.finditer(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"', html):
-                        link = match.group(1)
-                        if 'bing.com/ck/a' in link:
-                            ck_m = re.search(r'(?:\?|&amp;|&)u=([a-zA-Z0-9_\-]+)', link)
-                            if ck_m:
-                                enc = ck_m.group(1)
-                                if enc.startswith('a1'):
-                                    raw_b64 = enc[2:]
-                                    pad = len(raw_b64) % 4
-                                    padded = raw_b64 + ('=' * ((4 - pad) % 4))
-                                    try:
-                                        link = base64.urlsafe_b64decode(padded).decode('utf-8', errors='ignore')
-                                    except Exception:
-                                        continue
-                        if link.startswith('http') and 'bing.com' not in link and 'microsoft.com' not in link:
-                            urls.append(link)
-                            if on_url:
-                                asyncio.create_task(on_url(link))
+
+            async def fetch_page(first: int):
+                p_urls = []
+                try:
+                    async with session.get(
+                        f'https://www.bing.com/search?q={urllib.parse.quote(query)}{time_filter}&setlang=en-US&first={first}',
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=2.5)
+                    ) as response:
+                        if response.status == 200:
+                            html = await response.text()
+                            for match in re.finditer(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"', html):
+                                link = match.group(1)
+                                if 'bing.com/ck/a' in link:
+                                    ck_m = re.search(r'(?:\?|&amp;|&)u=([a-zA-Z0-9_\-]+)', link)
+                                    if ck_m:
+                                        enc = ck_m.group(1)
+                                        if enc.startswith('a1'):
+                                            raw_b64 = enc[2:]
+                                            pad = len(raw_b64) % 4
+                                            padded = raw_b64 + ('=' * ((4 - pad) % 4))
+                                            try:
+                                                link = base64.urlsafe_b64decode(padded).decode('utf-8', errors='ignore')
+                                            except Exception:
+                                                continue
+                                if link.startswith('http') and 'bing.com' not in link and 'microsoft.com' not in link:
+                                    p_urls.append(link)
+                                    if on_url:
+                                        try:
+                                            res = on_url(link)
+                                            if asyncio.iscoroutine(res):
+                                                asyncio.create_task(res)
+                                        except Exception:
+                                            pass
+                except Exception:
+                    pass
+                return p_urls
+
+            pages = await asyncio.gather(*[fetch_page(first) for first in [1, 11, 21]], return_exceptions=True)
+            for p in pages:
+                if isinstance(p, list):
+                    urls.extend(p)
         except Exception:
             pass
         return urls[:limit]
@@ -1114,7 +1128,12 @@ class SearchProviders:
                             if decoded.startswith('http') and not any(x in decoded for x in ['yahoo.', 'yimg.', 'advertising.com']):
                                 urls.append(decoded)
                                 if on_url:
-                                    asyncio.create_task(on_url(decoded))
+                                    try:
+                                        res = on_url(decoded)
+                                        if asyncio.iscoroutine(res):
+                                            asyncio.create_task(res)
+                                    except Exception:
+                                        pass
                         except Exception:
                             pass
         except Exception:
@@ -1122,36 +1141,42 @@ class SearchProviders:
         return urls[:limit]
 
     @staticmethod
-    async def search_wikipedia(session: aiohttp.ClientSession, query: str, limit: int = 35, on_url: Optional[Callable] = None) -> List[str]:
+    async def search_wikipedia(session: aiohttp.ClientSession, query: str, limit: int = 40, on_url: Optional[Callable] = None) -> List[str]:
         urls = []
         try:
             wiki_headers = {'User-Agent': 'WebScopeBot/2.0 (info@webscope.dev)'}
             async with session.get(
-                f'https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(query[:40])}&limit=5&namespace=0&format=json',
+                f'https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query[:40])}&utf8=&format=json&srlimit=5',
                 headers=wiki_headers,
-                timeout=aiohttp.ClientTimeout(total=2.0)
+                timeout=aiohttp.ClientTimeout(total=2.5)
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    titles = data[1] if len(data) > 1 else []
-                    for title in titles[:3]:
-                        try:
-                            async with session.get(
-                                f'https://en.wikipedia.org/w/api.php?action=parse&page={urllib.parse.quote(title)}&prop=externallinks&format=json',
-                                headers=wiki_headers,
-                                timeout=aiohttp.ClientTimeout(total=2.0)
-                            ) as parse_resp:
-                                if parse_resp.status == 200:
-                                    p_data = await parse_resp.json()
-                                    for raw_url in p_data.get('parse', {}).get('externallinks', []):
-                                        if raw_url.startswith('//'):
-                                            raw_url = 'https:' + raw_url
-                                        if raw_url.startswith('http') and not any(x in raw_url for x in ['wikipedia.org', 'wikimedia.org', 'wikidata.org', 'archive.org', 'doi.org']):
-                                            urls.append(raw_url)
-                                            if on_url:
-                                                asyncio.create_task(on_url(raw_url))
-                        except Exception:
-                            pass
+                    page_ids = [str(item['pageid']) for item in data.get('query', {}).get('search', []) if 'pageid' in item]
+                    if page_ids:
+                        pids = '|'.join(page_ids[:5])
+                        async with session.get(
+                            f'https://en.wikipedia.org/w/api.php?action=query&pageids={pids}&prop=extlinks&ellimit=50&format=json',
+                            headers=wiki_headers,
+                            timeout=aiohttp.ClientTimeout(total=2.5)
+                        ) as ext_resp:
+                            if ext_resp.status == 200:
+                                ext_data = await ext_resp.json()
+                                for pid, pdata in ext_data.get('query', {}).get('pages', {}).items():
+                                    for el in pdata.get('extlinks', []):
+                                        raw_url = el.get('*')
+                                        if raw_url:
+                                            if raw_url.startswith('//'):
+                                                raw_url = 'https:' + raw_url
+                                            if raw_url.startswith('http') and not any(x in raw_url for x in ['wikipedia.org', 'wikimedia.org', 'wikidata.org', 'archive.org', 'doi.org', 'w3.org']):
+                                                urls.append(raw_url)
+                                                if on_url:
+                                                    try:
+                                                        res = on_url(raw_url)
+                                                        if asyncio.iscoroutine(res):
+                                                            asyncio.create_task(res)
+                                                    except Exception:
+                                                        pass
         except Exception:
             pass
         return urls[:limit]
@@ -1270,7 +1295,7 @@ class ScrapingEngine:
 
         GlobalDomainRegistry.initialize()
         history = HistoryLogger.load_history()
-        self.history_domains = set(history.get('domains', [])) | set(history.get('filtered_domains', []))
+        self.history_domains = set(history.get('domains', []))
         self.history_urls = set(history.get('urls', []))
 
         self.filtered_domains: Set[str] = set()
@@ -1435,48 +1460,48 @@ class ScrapingEngine:
             if not await GlobalDomainRegistry.try_claim_domain(domain):
                 return None
 
-            self.used_domains.add(domain)
-
-            def _reject(d_to_reject: Optional[str] = domain):
-                if d_to_reject:
-                    self.used_domains.add(d_to_reject)
-                    self.filtered_domains.add(d_to_reject)
-                    asyncio.create_task(GlobalDomainRegistry.release_domain(d_to_reject, is_filtered=True))
-                return None
-
-            if not self.validator.is_authorized(domain, country=country, tld=tld):
-                return _reject()
-
-            if exclude_domains:
-                exc_norm = {self.validator.normalize(d) for d in exclude_domains if d}
-                if domain in exc_norm:
-                    return _reject()
-
-            if include_domains:
-                inc_norm = {self.validator.normalize(d) for d in include_domains if d}
-                if domain not in inc_norm:
-                    return _reject()
-
-            primary_url = f"https://www.{domain}/"
-            clean_root_url = f"https://{domain}"
-
-            if domain in self.seen_urls or primary_url in self.seen_urls:
-                return None
-
-            # Robotic pattern check across session stems
-            stem = self.validator.extract_name_stem(domain)
-            if stem:
-                if not any(v in stem for v in 'aeiouy') and len(stem) <= 4:
-                    for prev_stem in self.session_stems:
-                        if len(stem) == len(prev_stem) and stem[:-1] == prev_stem[:-1]:
-                            return _reject()
-                self.session_stems.add(stem)
-
-            self.seen_urls.add(domain)
-            self.seen_urls.add(primary_url)
-            self.seen_urls.add(clean_root_url)
-
+            delivered = False
             try:
+                self.used_domains.add(domain)
+
+                def _reject(d_to_reject: Optional[str] = domain):
+                    if d_to_reject:
+                        self.used_domains.add(d_to_reject)
+                        self.filtered_domains.add(d_to_reject)
+                    return None
+
+                if not self.validator.is_authorized(domain, country=country, tld=tld):
+                    return _reject()
+
+                if exclude_domains:
+                    exc_norm = {self.validator.normalize(d) for d in exclude_domains if d}
+                    if domain in exc_norm:
+                        return _reject()
+
+                if include_domains:
+                    inc_norm = {self.validator.normalize(d) for d in include_domains if d}
+                    if domain not in inc_norm:
+                        return _reject()
+
+                primary_url = f"https://www.{domain}/"
+                clean_root_url = f"https://{domain}"
+
+                if domain in self.seen_urls or primary_url in self.seen_urls:
+                    return None
+
+                # Robotic pattern check across session stems
+                stem = self.validator.extract_name_stem(domain)
+                if stem:
+                    if not any(v in stem for v in 'aeiouy') and len(stem) <= 4:
+                        for prev_stem in self.session_stems:
+                            if len(stem) == len(prev_stem) and stem[:-1] == prev_stem[:-1]:
+                                return _reject()
+                    self.session_stems.add(stem)
+
+                self.seen_urls.add(domain)
+                self.seen_urls.add(primary_url)
+                self.seen_urls.add(clean_root_url)
+
                 start = time.time()
                 req_headers = {
                     'User-Agent': random.choice(USER_AGENTS),
@@ -1498,8 +1523,8 @@ class ScrapingEngine:
                         ) as resp:
                             if resp.status not in [404, 410, 500, 502, 503, 504]:
                                 if resp.url and resp.url.host:
-                                    resp_host = resp.url.host.lower().strip()
-                                    if resp_host != domain and resp_host != f"www.{domain}":
+                                    resp_root = self.validator.extract_root_domain(resp.url.host)
+                                    if resp_root and resp_root != domain:
                                         return _reject(domain)
 
                                 raw = await resp.read()
@@ -1604,6 +1629,7 @@ class ScrapingEngine:
                 )
 
                 await GlobalDomainRegistry.mark_delivered(final_output_url, domain, query)
+                delivered = True
 
                 # Extract outlinks for recursive dynamic discovery
                 for lk in links[:20]:
@@ -1623,6 +1649,9 @@ class ScrapingEngine:
                 return result
             except Exception:
                 return _reject()
+            finally:
+                if not delivered:
+                    await GlobalDomainRegistry.release_domain(domain)
 
     async def search(
         self,
@@ -1646,230 +1675,226 @@ class ScrapingEngine:
                 self.pending_results_buffer = []
                 self.pending_filtered_buffer = set()
 
-            if on_progress:
-                on_progress({
-                    'status': 'searching',
-                    'discovered': 0,
-                    'processed': 0,
-                    'accepted': 0,
-                    'remaining': None,
-                    'progress': 2
-                })
+                if on_progress:
+                    on_progress({
+                        'status': 'searching',
+                        'discovered': 0,
+                        'processed': 0,
+                        'accepted': 0,
+                        'remaining': None,
+                        'progress': 2
+                    })
 
-            area_str = f" {area.strip()}" if area else ""
-            clean_tld = tld.strip().lstrip('.').lower() if tld else None
-            tld_str = f" site:{clean_tld}" if clean_tld else ""
+                area_str = f" {area.strip()}" if area else ""
+                clean_tld = tld.strip().lstrip('.').lower() if tld else None
+                tld_str = f" site:{clean_tld}" if clean_tld else ""
 
-            DIVERSE_TLDS = ['io', 'ai', 'tech', 'co', 'net', 'dev', 'app', 'global', 'solutions', 'cloud', 'co.uk', 'de', 'ca', 'fr', 'eu']
-            BUSINESS_SUFFIXES = ['companies', 'manufacturers', 'solutions', 'providers', 'startups', 'directory', 'hub', 'network', 'platform', 'systems']
-            active_tlds = [clean_tld] if clean_tld else random.sample(DIVERSE_TLDS, min(len(DIVERSE_TLDS), 10))
+                DIVERSE_TLDS = ['io', 'ai', 'tech', 'co', 'net', 'dev', 'app', 'global', 'solutions', 'cloud', 'co.uk', 'de', 'ca', 'fr', 'eu']
+                BUSINESS_SUFFIXES = ['companies', 'manufacturers', 'solutions', 'providers', 'startups', 'directory', 'hub', 'network', 'platform', 'systems']
+                active_tlds = [clean_tld] if clean_tld else random.sample(DIVERSE_TLDS, min(len(DIVERSE_TLDS), 10))
 
-            meaningful = []
-            if query and query.strip():
-                raw_words = [w for w in re.split(r'\s+', query.strip()) if len(w) > 2]
-                stopwords = {'innovative', 'best', 'top', 'new', 'latest', 'leading', 'great', 'modern', 'free', 'online', 'good', 'find', 'get', 'website', 'websites'}
-                meaningful = [w for w in raw_words if w.lower() not in stopwords] or raw_words
+                meaningful = []
+                if query and query.strip():
+                    raw_words = [w for w in re.split(r'\s+', query.strip()) if len(w) > 2]
+                    stopwords = {'innovative', 'best', 'top', 'new', 'latest', 'leading', 'great', 'modern', 'free', 'online', 'good', 'find', 'get', 'website', 'websites'}
+                    meaningful = [w for w in raw_words if w.lower() not in stopwords] or raw_words
 
-            if not query or not query.strip():
-                sampled_sectors = random.sample(RANDOM_SECTORS, min(len(RANDOM_SECTORS), 25))
-                queries = [f"{sec}{area_str}{tld_str}".strip() for sec in sampled_sectors]
-                effective_query = random.choice(sampled_sectors)
-            else:
-                effective_query = query.strip()
-                VARIATIONS = []
-                for sampled_tld in active_tlds:
+                if not query or not query.strip():
+                    sampled_sectors = random.sample(RANDOM_SECTORS, min(len(RANDOM_SECTORS), 25))
+                    queries = [f"{sec}{area_str}{tld_str}".strip() for sec in sampled_sectors]
+                    effective_query = random.choice(sampled_sectors)
+                else:
+                    effective_query = query.strip()
+                    VARIATIONS = []
+                    for sampled_tld in active_tlds:
+                        for w in meaningful[:3]:
+                            VARIATIONS.append(f"{w} companies{area_str} site:{sampled_tld}".strip())
                     for w in meaningful[:3]:
-                        VARIATIONS.append(f"{w} companies{area_str} site:{sampled_tld}".strip())
-                for w in meaningful[:3]:
-                    for suf in random.sample(BUSINESS_SUFFIXES, min(len(BUSINESS_SUFFIXES), 3)):
-                        VARIATIONS.append(f"{w} {suf}{area_str}{tld_str}".strip())
-                VARIATIONS.append(f"{query}{area_str} companies".strip())
-                VARIATIONS.append(f"{query}{area_str} solutions".strip())
-                VARIATIONS.append(f"{query}{area_str}{tld_str}".strip())
+                        for suf in random.sample(BUSINESS_SUFFIXES, min(len(BUSINESS_SUFFIXES), 3)):
+                            VARIATIONS.append(f"{w} {suf}{area_str}{tld_str}".strip())
+                    VARIATIONS.append(f"{query}{area_str} companies".strip())
+                    VARIATIONS.append(f"{query}{area_str} solutions".strip())
+                    VARIATIONS.append(f"{query}{area_str}{tld_str}".strip())
 
-                seen_q = set()
-                queries = []
-                for v in VARIATIONS:
-                    if v and v not in seen_q:
-                        seen_q.add(v)
-                        queries.append(v)
-                random.shuffle(queries)
+                    seen_q = set()
+                    queries = []
+                    for v in VARIATIONS:
+                        if v and v not in seen_q:
+                            seen_q.add(v)
+                            queries.append(v)
+                    random.shuffle(queries)
 
-            candidate_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=50000)
-            seen_candidate_domains: Set[str] = set()
-            stop_event = asyncio.Event()
+                candidate_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=50000)
+                seen_candidate_domains: Set[str] = set()
+                stop_event = asyncio.Event()
 
-            async def push_candidate(u: str):
-                if not u or stop_event.is_set():
-                    return
-                if candidate_queue.qsize() > 500:
-                    return
-                d = self.validator.extract_root_domain(u)
-                if not d or d in seen_candidate_domains or d in self.history_domains or d in self.used_domains:
-                    return
-                if await GlobalDomainRegistry.is_already_discovered(d):
-                    return
-                if not self.validator.is_authorized(d, country=country, tld=tld):
-                    self.used_domains.add(d)
-                    self.filtered_domains.add(d)
-                    self.pending_filtered_buffer.add(d)
-                    return
-                seen_candidate_domains.add(d)
-                clean_url = f"https://www.{d}"
-                await candidate_queue.put(clean_url)
-                self.total_discovered += 1
+                async def push_candidate(u: str):
+                    if not u or stop_event.is_set():
+                        return
+                    if candidate_queue.qsize() > 500:
+                        return
+                    d = self.validator.extract_root_domain(u)
+                    if not d or d in seen_candidate_domains or d in self.history_domains or d in self.used_domains:
+                        return
+                    if d in GlobalDomainRegistry._delivered_domains:
+                        return
+                    if not self.validator.is_authorized(d, country=country, tld=tld):
+                        self.used_domains.add(d)
+                        self.filtered_domains.add(d)
+                        self.pending_filtered_buffer.add(d)
+                        return
+                    seen_candidate_domains.add(d)
+                    clean_url = f"https://www.{d}"
+                    await candidate_queue.put(clean_url)
+                    self.total_discovered += 1
 
-            async def stream_provider(coro):
-                try:
-                    urls = await asyncio.wait_for(coro, timeout=3.5)
-                    if isinstance(urls, list):
-                        for u in urls:
-                            if stop_event.is_set():
-                                break
-                            await push_candidate(u)
-                except Exception:
-                    pass
-
-            # Outlink Ingestor for recursive discovery
-            async def outlink_ingestor():
-                while not stop_event.is_set():
-                    if self.dynamic_candidates and candidate_queue.qsize() < max(limit, 20):
-                        batch = list(self.dynamic_candidates)[:10]
-                        for u in batch:
-                            self.dynamic_candidates.discard(u)
-                            await push_candidate(u)
-                    await asyncio.sleep(0.1)
-
-            # Continuous Discovery Producer
-            async def discovery_producer():
-                try:
-                    initial_tasks = [
-                        asyncio.create_task(stream_provider(SearchProviders.search_wikipedia(self.session, effective_query, 40, on_url=push_candidate))),
-                        asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, effective_query, 35, time_frame=time_frame, on_url=push_candidate))),
-                        asyncio.create_task(stream_provider(SearchProviders.search_duckduckgo(self.session, effective_query, 35, on_url=push_candidate))),
-                        asyncio.create_task(stream_provider(SearchProviders.search_yahoo(self.session, effective_query, 25, time_frame=time_frame, on_url=push_candidate))),
-                    ]
-
-                    for q in queries[:max(20, min(len(queries), 40))]:
-                        initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, q, 25, time_frame=time_frame, on_url=push_candidate))))
-                        initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_duckduckgo(self.session, q, 25, on_url=push_candidate))))
-                        initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, q, 25, on_url=push_candidate))))
-
-                    async def continuous_streamer():
-                        round_num = 0
-                        while not stop_event.is_set() and len(all_results) < limit:
-                            if candidate_queue.qsize() < 150:
-                                round_num += 1
-                                w = random.choice(meaningful) if meaningful else random.choice(RANDOM_SECTORS).split()[0]
-                                suf = random.choice(BUSINESS_SUFFIXES)
-                                q_target = f"{w} {suf}{area_str}{tld_str}".strip()
-                                engine_choice = round_num % 3
-                                if engine_choice == 0:
-                                    asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, q_target, 25, time_frame=time_frame, on_url=push_candidate)))
-                                elif engine_choice == 1:
-                                    asyncio.create_task(stream_provider(SearchProviders.search_duckduckgo(self.session, q_target, 25, on_url=push_candidate)))
-                                else:
-                                    asyncio.create_task(stream_provider(SearchProviders.search_yahoo(self.session, q_target, 20, time_frame=time_frame, on_url=push_candidate)))
-                            await asyncio.sleep(0.05)
-
-                    streamer_task = asyncio.create_task(continuous_streamer())
-                    await asyncio.gather(*initial_tasks, streamer_task, return_exceptions=True)
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-
-            # Validation Workers
-            num_workers = min(1200, max(300, self.max_concurrent))
-            seen_accepted_domains: Set[str] = set()
-
-            async def validation_worker():
-                while not stop_event.is_set() and len(all_results) < limit:
+                async def stream_provider(coro):
                     try:
-                        url = await asyncio.wait_for(candidate_queue.get(), timeout=0.15)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        continue
-
-                    if stop_event.is_set() or len(all_results) >= limit:
-                        candidate_queue.task_done()
-                        break
-
-                    try:
-                        r = await self._validate_and_scrape(
-                            url, query, country=country, time_frame=time_frame,
-                            area=area, tld=tld, on_candidate_found=push_candidate,
-                            include_domains=include_domains, exclude_domains=exclude_domains
-                        )
-                        self.total_processed += 1
-                        if isinstance(r, ScrapedResult) and r.is_alive:
-                            d = r.domain or self.validator.extract_root_domain(r.url)
-                            fmt_url = f"https://www.{d}" if d else ""
-                            if fmt_url and fmt_url not in seen_accepted_domains and d not in seen_accepted_domains:
-                                seen_accepted_domains.add(fmt_url)
-                                seen_accepted_domains.add(d)
-                                res_dict = asdict(r)
-                                res_dict['url'] = fmt_url
-                                all_results.append(res_dict)
-                                self.pending_results_buffer.append(res_dict)
-                                if len(all_results) >= limit:
-                                    stop_event.set()
+                        urls = await coro
+                        if isinstance(urls, list):
+                            for u in urls:
+                                if stop_event.is_set():
+                                    break
+                                await push_candidate(u)
                     except Exception:
-                        self.total_processed += 1
-                    finally:
-                        candidate_queue.task_done()
+                        pass
 
-            # Progress Reporting Loop
-            async def progress_notifier():
-                while not stop_event.is_set() and len(all_results) < limit:
-                    if on_progress:
-                        elapsed = max(0.1, time.time() - self.start_time)
-                        rate = len(all_results) / elapsed if len(all_results) > 0 else (self.total_processed / elapsed * 0.4)
-                        remaining = round((limit - len(all_results)) / rate, 1) if rate > 0.1 else None
-                        on_progress({
-                            'status': 'searching',
-                            'discovered': max(self.total_discovered, self.total_processed, len(all_results)),
-                            'processed': self.total_processed,
-                            'accepted': len(all_results),
-                            'remaining': remaining,
-                            'progress': min(99, (len(all_results) / limit) * 100)
-                        })
-                    await asyncio.sleep(0.2)
+                # Outlink Ingestor for recursive discovery
+                async def outlink_ingestor():
+                    while not stop_event.is_set():
+                        if self.dynamic_candidates and candidate_queue.qsize() < max(limit, 20):
+                            batch = list(self.dynamic_candidates)[:10]
+                            for u in batch:
+                                self.dynamic_candidates.discard(u)
+                                await push_candidate(u)
+                        await asyncio.sleep(0.1)
 
-            producer_task = asyncio.create_task(discovery_producer())
-            ingestor_task = asyncio.create_task(outlink_ingestor())
-            worker_tasks = [asyncio.create_task(validation_worker()) for _ in range(num_workers)]
-            notifier_task = asyncio.create_task(progress_notifier())
+                # Continuous Discovery Producer
+                async def discovery_producer():
+                    try:
+                        initial_tasks = [
+                            asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, effective_query, 35, time_frame=time_frame, on_url=push_candidate))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_wikipedia(self.session, effective_query, 40, on_url=push_candidate))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, effective_query, 35, on_url=push_candidate))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_reddit(self.session, effective_query, 25))),
+                        ]
 
-            while len(all_results) < limit and not stop_event.is_set():
-                await asyncio.sleep(0.02)
+                        for q in queries[:max(20, min(len(queries), 40))]:
+                            initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, q, 25, time_frame=time_frame, on_url=push_candidate))))
+                            initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, q, 25, on_url=push_candidate))))
 
-            stop_event.set()
-            producer_task.cancel()
-            ingestor_task.cancel()
-            notifier_task.cancel()
-            for w in worker_tasks:
-                w.cancel()
-            await asyncio.gather(producer_task, ingestor_task, notifier_task, *worker_tasks, return_exceptions=True)
+                        async def continuous_streamer():
+                            round_num = 0
+                            while not stop_event.is_set() and len(all_results) < limit:
+                                if candidate_queue.qsize() < 150:
+                                    round_num += 1
+                                    w = random.choice(meaningful) if meaningful else random.choice(RANDOM_SECTORS).split()[0]
+                                    suf = random.choice(BUSINESS_SUFFIXES)
+                                    q_target = f"{w} {suf}{area_str}{tld_str}".strip()
+                                    if round_num % 2 == 0:
+                                        asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, q_target, 25, time_frame=time_frame, on_url=push_candidate)))
+                                    else:
+                                        asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, q_target, 25, on_url=push_candidate)))
+                                await asyncio.sleep(0.05)
 
-            final_results = all_results[:limit]
+                        streamer_task = asyncio.create_task(continuous_streamer())
+                        await asyncio.gather(*initial_tasks, streamer_task, return_exceptions=True)
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
 
-            # Save to persistent history
-            if len(final_results) >= limit:
-                loop = asyncio.get_event_loop()
-                elapsed_sec = time.time() - self.start_time
-                await loop.run_in_executor(None, HistoryLogger.save_new_results, final_results, self.filtered_domains, query, elapsed_sec)
+                # Validation Workers
+                num_workers = min(1200, max(300, self.max_concurrent))
+                seen_accepted_domains: Set[str] = set()
 
-            if on_progress:
-                on_progress({
-                    'status': 'completed' if len(final_results) >= limit else 'partial',
-                    'discovered': max(self.total_discovered, self.total_processed, len(final_results)),
-                    'processed': self.total_processed,
-                    'accepted': len(final_results),
-                    'remaining': 0,
-                    'progress': 100
-                })
+                async def validation_worker():
+                    while not stop_event.is_set() and len(all_results) < limit:
+                        try:
+                            url = await asyncio.wait_for(candidate_queue.get(), timeout=0.15)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            continue
 
-            return final_results
+                        if stop_event.is_set() or len(all_results) >= limit:
+                            candidate_queue.task_done()
+                            break
+
+                        try:
+                            r = await self._validate_and_scrape(
+                                url, query, country=country, time_frame=time_frame,
+                                area=area, tld=tld, on_candidate_found=push_candidate,
+                                include_domains=include_domains, exclude_domains=exclude_domains
+                            )
+                            self.total_processed += 1
+                            if isinstance(r, ScrapedResult) and r.is_alive:
+                                d = r.domain or self.validator.extract_root_domain(r.url)
+                                fmt_url = f"https://www.{d}" if d else ""
+                                if fmt_url and fmt_url not in seen_accepted_domains and d not in seen_accepted_domains:
+                                    seen_accepted_domains.add(fmt_url)
+                                    seen_accepted_domains.add(d)
+                                    res_dict = asdict(r)
+                                    res_dict['url'] = fmt_url
+                                    all_results.append(res_dict)
+                                    self.pending_results_buffer.append(res_dict)
+                                    if len(all_results) >= limit:
+                                        stop_event.set()
+                        except Exception:
+                            self.total_processed += 1
+                        finally:
+                            candidate_queue.task_done()
+
+                # Progress Reporting Loop
+                async def progress_notifier():
+                    while not stop_event.is_set() and len(all_results) < limit:
+                        if on_progress:
+                            elapsed = max(0.1, time.time() - self.start_time)
+                            rate = len(all_results) / elapsed if len(all_results) > 0 else (self.total_processed / elapsed * 0.4)
+                            remaining = round((limit - len(all_results)) / rate, 1) if rate > 0.1 else None
+                            on_progress({
+                                'status': 'searching',
+                                'discovered': max(self.total_discovered, self.total_processed, len(all_results)),
+                                'processed': self.total_processed,
+                                'accepted': len(all_results),
+                                'remaining': remaining,
+                                'progress': min(99, (len(all_results) / limit) * 100)
+                            })
+                        await asyncio.sleep(0.2)
+
+                producer_task = asyncio.create_task(discovery_producer())
+                ingestor_task = asyncio.create_task(outlink_ingestor())
+                worker_tasks = [asyncio.create_task(validation_worker()) for _ in range(num_workers)]
+                notifier_task = asyncio.create_task(progress_notifier())
+
+                while len(all_results) < limit and not stop_event.is_set():
+                    await asyncio.sleep(0.02)
+
+                stop_event.set()
+                producer_task.cancel()
+                ingestor_task.cancel()
+                notifier_task.cancel()
+                for w in worker_tasks:
+                    w.cancel()
+                await asyncio.gather(producer_task, ingestor_task, notifier_task, *worker_tasks, return_exceptions=True)
+
+                final_results = all_results[:limit]
+
+                # Save to persistent history
+                if len(final_results) >= limit:
+                    loop = asyncio.get_event_loop()
+                    elapsed_sec = time.time() - self.start_time
+                    await loop.run_in_executor(None, HistoryLogger.save_new_results, final_results, self.filtered_domains, query, elapsed_sec)
+
+                if on_progress:
+                    on_progress({
+                        'status': 'completed' if len(final_results) >= limit else 'partial',
+                        'discovered': max(self.total_discovered, self.total_processed, len(final_results)),
+                        'processed': self.total_processed,
+                        'accepted': len(final_results),
+                        'remaining': 0,
+                        'progress': 100
+                    })
+
+                return final_results
         except Exception:
             return all_results[:limit] if all_results else (self.pending_results_buffer[:limit] if self.pending_results_buffer else [])
 
