@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: website-url-scraping-tools
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PYTHON_SCRAPER_URL
+        value: http://127.0.0.1:8000
