@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createJob, updateJob } from '@/lib/job-store';
 import { SearchRequest } from '@/lib/types';
 
-const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || 'http://localhost:8000';
+const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
 
 export async function POST(request: NextRequest) {
   try {

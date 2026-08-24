@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJob, updateJob } from '@/lib/job-store';
 
+const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -21,7 +23,7 @@ export async function GET(
 
     if (job.status !== 'completed' && job.status !== 'failed') {
       try {
-        const pyRes = await fetch(`http://localhost:8000/progress/${job.id}`, { cache: 'no-store' });
+        const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/progress/${job.id}`, { cache: 'no-store' });
         if (pyRes.ok) {
           const pyData = await pyRes.json();
           if (pyData.candidates !== undefined) candidates = Math.max(candidates, pyData.candidates);

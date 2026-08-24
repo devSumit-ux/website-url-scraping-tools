@@ -14,6 +14,8 @@ function formatProperUrl(urlOrDomain: string): string {
   return `https://www.${d}`;
 }
 
+const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -31,7 +33,7 @@ export async function GET(
     // If memory store doesn't have results yet, fetch directly from Python backend
     if (resultsList.length === 0) {
       try {
-        const pyRes = await fetch(`http://localhost:8000/results/${id}`, {
+        const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/results/${id}`, {
           cache: 'no-store',
           signal: AbortSignal.timeout(5000)
         });
