@@ -73,10 +73,10 @@ export default function Home() {
       const storedDelivered = localStorage.getItem('webscope-cached-delivered-urls');
       if (storedDelivered) setCachedDelivered(JSON.parse(storedDelivered));
 
-      const storedFiltered = localStorage.getItem('webscope-cached-filtered-domains');
-      if (storedFiltered) setCachedFiltered(JSON.parse(storedFiltered));
-
-      try { sessionStorage.removeItem('webscope-active-job'); } catch {}
+      try {
+        localStorage.removeItem('webscope-cached-filtered-domains');
+        sessionStorage.removeItem('webscope-active-job');
+      } catch {}
     } catch {}
   }, []);
 
@@ -141,17 +141,12 @@ export default function Home() {
     setLastSearchRequest(request);
     currentQueryRef.current = request.query;
 
-    // Combine browser cached delivered and filtered domains to guarantee zero duplicates & avoid re-filtering
-    const excludedFromCache = Array.from(new Set([
-      ...cachedDelivered.map(extractRootDomain),
-      ...cachedFiltered.map(extractRootDomain),
-      ...(request.excludeDomains || []).map(extractRootDomain)
-    ])).filter(Boolean);
+    const userExclusions = (request.excludeDomains || []).map(extractRootDomain).filter(Boolean);
 
     const enrichedRequest: SearchRequest = {
       ...request,
       limit: request.limit || 30, // Default to 30 URLs for ultra-fast scraping
-      excludeDomains: excludedFromCache,
+      excludeDomains: userExclusions,
     };
 
     setProgress({
