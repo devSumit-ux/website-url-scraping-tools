@@ -28,10 +28,6 @@ from fastapi.responses import JSONResponse, Response, PlainTextResponse
 
 app = FastAPI(title="WebScope Scraping Engine", version="2.0.0")
 
-@app.on_event("startup")
-async def on_startup():
-    asyncio.create_task(asyncio.to_thread(GlobalDomainRegistry.initialize))
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
