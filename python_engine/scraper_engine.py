@@ -1401,9 +1401,8 @@ class ScrapingEngine:
         self.checker = SiteChecker()
 
         GlobalDomainRegistry.initialize()
-        history = HistoryLogger.load_history()
-        self.history_domains = set(history.get('domains', []))
-        self.history_urls = set(history.get('urls', []))
+        self.history_domains = GlobalDomainRegistry._delivered_domains
+        self.history_urls = GlobalDomainRegistry._delivered_urls
 
         self.filtered_domains: Set[str] = set()
         self.used_domains: Set[str] = set()

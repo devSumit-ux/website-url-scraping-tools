@@ -161,33 +161,23 @@ export default function Home() {
 
   const fetchHistoryStats = useCallback(async () => {
     try {
-      const [resHistory, resCache] = await Promise.allSettled([
-        fetch('/api/history'),
-        fetch('/api/cache/stats')
-      ]);
-
-      let stats: any = {};
-      if (resHistory.status === 'fulfilled' && resHistory.value.ok) {
-        stats = await resHistory.value.json();
-      }
-      if (resCache.status === 'fulfilled' && resCache.value.ok) {
-        const cacheData = await resCache.value.json();
-        stats = { ...stats, ...cacheData };
-      }
-
-      const approvedCount = stats.total_unique_approved || stats.mongodb_approved || stats.total_unique || 0;
-      if (approvedCount > 0) {
-        try {
-          localStorage.setItem('webscope-last-cloud-count', String(approvedCount));
-        } catch {}
-        setHistoryStats(stats);
+      const res = await fetch('/api/cache/stats');
+      if (res.ok) {
+        const stats = await res.json();
+        const approvedCount = stats.total_unique_approved || stats.mongodb_approved || stats.total_unique || 0;
+        if (approvedCount > 0) {
+          try {
+            localStorage.setItem('webscope-last-cloud-count', String(approvedCount));
+          } catch {}
+          setHistoryStats(stats);
+        }
       }
     } catch {}
   }, []);
 
   useEffect(() => {
     fetchHistoryStats();
-    const interval = setInterval(fetchHistoryStats, 6000);
+    const interval = setInterval(fetchHistoryStats, 15000);
     return () => clearInterval(interval);
   }, [fetchHistoryStats]);
 
@@ -226,7 +216,8 @@ export default function Home() {
       });
 
       if (!res.ok) {
-        throw new Error('Search failed to start');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Search failed to start');
       }
 
       const data: SearchResponse = await res.json();
