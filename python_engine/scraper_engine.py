@@ -857,9 +857,77 @@ class HistoryLogger:
 
         return res
 
-    @staticmethod
-    def save_accepted_domain(url: str, domain: str, query: str = ""):
-        history = HistoryLogger.load_history()
+    _bg_queue: Any = None
+    _bg_thread: Any = None
+
+    @classmethod
+    def _ensure_bg_writer(cls):
+        if cls._bg_thread is None or not cls._bg_thread.is_alive():
+            import queue, threading
+            cls._bg_queue = queue.Queue()
+
+            def _writer_loop():
+                while True:
+                    try:
+                        batch = []
+                        item = cls._bg_queue.get()
+                        if item is None:
+                            break
+                        batch.append(item)
+                        while len(batch) < 100:
+                            try:
+                                nxt = cls._bg_queue.get_nowait()
+                                if nxt is None:
+                                    break
+                                batch.append(nxt)
+                            except queue.Empty:
+                                break
+
+                        # 1. Real-time batch upsert to MongoDB Atlas
+                        if MongoCacheStorage:
+                            try:
+                                storage = MongoCacheStorage.get_instance()
+                                if storage.is_connected():
+                                    items_to_save = []
+                                    for itm in batch:
+                                        if itm.get('domain'):
+                                            items_to_save.append({
+                                                'url': itm.get('url') or f"https://www.{itm['domain']}",
+                                                'domain': itm['domain'],
+                                                'title': itm.get('title') or itm['domain'].capitalize()
+                                            })
+                                    if items_to_save:
+                                        storage.save_approved_results(items_to_save, query=batch[0].get('query', ''))
+                            except Exception:
+                                pass
+
+                        # 2. Flush to local file
+                        history = cls.load_history()
+                        try:
+                            with open(HISTORY_FILE_PATH, 'w', encoding='utf-8') as f:
+                                json.dump({
+                                    'domains': sorted(list(history['domains'])),
+                                    'filtered_domains': sorted(list(history['filtered_domains'])),
+                                    'stems': sorted(list(history['stems'])),
+                                    'urls': sorted(list(history['urls'])),
+                                    'total_unique': len(history['domains']),
+                                    'total_filtered': len(history['filtered_domains']),
+                                    'last_updated': datetime.now(timezone.utc).isoformat()
+                                }, f, indent=2)
+                        except Exception:
+                            pass
+
+                        for _ in batch:
+                            cls._bg_queue.task_done()
+                    except Exception:
+                        pass
+
+            cls._bg_thread = threading.Thread(target=_writer_loop, daemon=True)
+            cls._bg_thread.start()
+
+    @classmethod
+    def save_accepted_domain(cls, url: str, domain: str, query: str = "", title: str = ""):
+        history = cls.load_history()
         if url:
             history['urls'].add(url)
         if domain:
@@ -868,33 +936,8 @@ class HistoryLogger:
             if stem:
                 history['stems'].add(stem)
 
-        # Save to local
-        try:
-            with open(HISTORY_FILE_PATH, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'domains': sorted(list(history['domains'])),
-                    'filtered_domains': sorted(list(history['filtered_domains'])),
-                    'stems': sorted(list(history['stems'])),
-                    'urls': sorted(list(history['urls'])),
-                    'total_unique': len(history['domains']),
-                    'total_filtered': len(history['filtered_domains']),
-                    'last_updated': datetime.now(timezone.utc).isoformat()
-                }, f, indent=2)
-        except Exception:
-            pass
-
-        # Save to MongoDB Atlas
-        if MongoCacheStorage:
-            try:
-                storage = MongoCacheStorage.get_instance()
-                if storage.is_connected() and domain:
-                    storage.save_approved_results([{
-                        'url': url or f"https://www.{domain}",
-                        'domain': domain,
-                        'title': domain.capitalize()
-                    }], query=query)
-            except Exception:
-                pass
+        cls._ensure_bg_writer()
+        cls._bg_queue.put({'url': url, 'domain': domain, 'query': query, 'title': title})
 
     @staticmethod
     def save_new_results(results: List[Dict], filtered_domains: Optional[Set[str]] = None, query: Optional[str] = None, elapsed: Optional[float] = None):
@@ -1877,28 +1920,36 @@ class ScrapingEngine:
                     try:
                         initial_tasks = [
                             asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, effective_query, 35, time_frame=time_frame, on_url=push_candidate))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_duckduckgo(self.session, effective_query, 35, on_url=push_candidate))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_yahoo(self.session, effective_query, 30, time_frame=time_frame, on_url=push_candidate))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_brave(self.session, effective_query, 25, on_url=push_candidate))),
                             asyncio.create_task(stream_provider(SearchProviders.search_wikipedia(self.session, effective_query, 40, on_url=push_candidate))),
                             asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, effective_query, 35, on_url=push_candidate))),
                             asyncio.create_task(stream_provider(SearchProviders.search_reddit(self.session, effective_query, 25))),
+                            asyncio.create_task(stream_provider(SearchProviders.search_github(self.session, effective_query, 20))),
                         ]
 
                         for q in queries[:max(20, min(len(queries), 40))]:
                             initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, q, 25, time_frame=time_frame, on_url=push_candidate))))
+                            initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_duckduckgo(self.session, q, 25, on_url=push_candidate))))
+                            initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_yahoo(self.session, q, 20, time_frame=time_frame, on_url=push_candidate))))
                             initial_tasks.append(asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, q, 25, on_url=push_candidate))))
 
                         async def continuous_streamer():
                             round_num = 0
                             while not stop_event.is_set() and len(all_results) < limit:
-                                if candidate_queue.qsize() < 150:
+                                if candidate_queue.qsize() < 250:
                                     round_num += 1
                                     w = random.choice(meaningful) if meaningful else random.choice(RANDOM_SECTORS).split()[0]
                                     suf = random.choice(BUSINESS_SUFFIXES)
                                     q_target = f"{w} {suf}{area_str}{tld_str}".strip()
-                                    if round_num % 2 == 0:
+                                    if round_num % 3 == 0:
                                         asyncio.create_task(stream_provider(SearchProviders.search_bing(self.session, q_target, 25, time_frame=time_frame, on_url=push_candidate)))
+                                    elif round_num % 3 == 1:
+                                        asyncio.create_task(stream_provider(SearchProviders.search_duckduckgo(self.session, q_target, 25, on_url=push_candidate)))
                                     else:
                                         asyncio.create_task(stream_provider(SearchProviders.search_hackernews(self.session, q_target, 25, on_url=push_candidate)))
-                                await asyncio.sleep(0.05)
+                                await asyncio.sleep(0.04)
 
                         streamer_task = asyncio.create_task(continuous_streamer())
                         await asyncio.gather(*initial_tasks, streamer_task, return_exceptions=True)
@@ -1908,7 +1959,7 @@ class ScrapingEngine:
                         pass
 
                 # Validation Workers
-                num_workers = min(60, max(15, limit * 2))
+                num_workers = min(120, max(40, limit * 3))
                 seen_accepted_domains: Set[str] = set()
 
                 async def validation_worker():
