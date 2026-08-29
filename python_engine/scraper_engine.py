@@ -1908,15 +1908,15 @@ class ScrapingEngine:
                         pass
 
                 # Validation Workers
-                num_workers = min(1200, max(300, self.max_concurrent))
+                num_workers = min(60, max(15, limit * 2))
                 seen_accepted_domains: Set[str] = set()
 
                 async def validation_worker():
                     while not stop_event.is_set() and len(all_results) < limit:
                         try:
-                            url = await asyncio.wait_for(candidate_queue.get(), timeout=0.15)
-                        except (asyncio.TimeoutError, asyncio.CancelledError):
-                            continue
+                            url = await candidate_queue.get()
+                        except (asyncio.CancelledError, Exception):
+                            break
 
                         if stop_event.is_set() or len(all_results) >= limit:
                             candidate_queue.task_done()
@@ -1961,7 +1961,7 @@ class ScrapingEngine:
                                 'remaining': remaining,
                                 'progress': min(99, (len(all_results) / limit) * 100)
                             })
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.3)
 
                 producer_task = asyncio.create_task(discovery_producer())
                 ingestor_task = asyncio.create_task(outlink_ingestor())
@@ -1969,7 +1969,7 @@ class ScrapingEngine:
                 notifier_task = asyncio.create_task(progress_notifier())
 
                 while len(all_results) < limit and not stop_event.is_set():
-                    await asyncio.sleep(0.02)
+                    await asyncio.sleep(0.05)
 
                 stop_event.set()
                 producer_task.cancel()
