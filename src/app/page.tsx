@@ -103,15 +103,7 @@ export default function Home() {
     } catch {}
   }, []);
 
-  const handleClearBrowserCache = () => {
-    try {
-      localStorage.removeItem('webscope-cached-delivered-urls');
-      localStorage.removeItem('webscope-cached-filtered-domains');
-      setCachedDelivered([]);
-      setCachedFiltered([]);
-      showToast('Browser URL cache cleared');
-    } catch {}
-  };
+
 
   const handleCancelSearch = useCallback(async () => {
     if (jobId) {
@@ -478,30 +470,17 @@ export default function Home() {
               </p>
             </div>
 
-            {/* Browser Cache & History Deduplication Banner */}
-            <div className="max-w-2xl mx-auto mb-6 p-3 rounded-lg bg-muted/40 border border-border/80 text-xs text-muted-foreground flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
-              <div className="flex items-center gap-2.5">
-                <Database className="h-4 w-4 text-emerald-500 shrink-0" />
-                <span>
-                  <strong className="text-foreground font-semibold">
-                    {(historyStats?.mongodb_approved || historyStats?.total_unique || 0).toLocaleString()}
-                  </strong> Global Verified URLs in Cloud Database
-                  {cachedDelivered.length > 0 && (
-                    <> · <strong className="text-foreground font-semibold">{cachedDelivered.length.toLocaleString()}</strong> in local browser</>
-                  )}
-                </span>
-              </div>
-              <div className="flex items-center gap-2.5">
+            {/* Cloud Database Deduplication Banner */}
+            <div className="max-w-2xl mx-auto mb-6 p-3 rounded-lg bg-muted/40 border border-border/80 text-xs text-muted-foreground flex items-center justify-center gap-2.5 shadow-xs text-center">
+              <Database className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span>
+                <strong className="text-foreground font-semibold">
+                  {(historyStats?.mongodb_approved || historyStats?.total_unique || 0).toLocaleString()}
+                </strong> Global Verified URLs in Cloud Database
                 {cachedDelivered.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleClearBrowserCache}
-                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
-                  >
-                    Clear Local
-                  </button>
+                  <> · <strong className="text-foreground font-semibold">{cachedDelivered.length.toLocaleString()}</strong> in local browser</>
                 )}
-              </div>
+              </span>
             </div>
 
             <SearchComposer
