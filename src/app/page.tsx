@@ -76,9 +76,17 @@ export default function Home() {
     return d;
   };
 
-  // Initialize and load browser cache
+  // Initialize and load browser cache & persistent cloud count
   useEffect(() => {
     try {
+      const storedCount = localStorage.getItem('webscope-last-cloud-count');
+      if (storedCount) {
+        const num = parseInt(storedCount, 10);
+        if (!isNaN(num) && num > 0) {
+          setHistoryStats({ total_unique_approved: num, total_unique: num, total_urls: num });
+        }
+      }
+
       const storedHistory = localStorage.getItem('webscope-history');
       if (storedHistory) setHistory(JSON.parse(storedHistory));
 
@@ -102,8 +110,6 @@ export default function Home() {
       } catch {}
     } catch {}
   }, []);
-
-
 
   const handleCancelSearch = useCallback(async () => {
     if (jobId) {
@@ -140,7 +146,11 @@ export default function Home() {
         stats = { ...stats, ...cacheData };
       }
 
-      if (Object.keys(stats).length > 0) {
+      const approvedCount = stats.total_unique_approved || stats.mongodb_approved || stats.total_unique || 0;
+      if (approvedCount > 0) {
+        try {
+          localStorage.setItem('webscope-last-cloud-count', String(approvedCount));
+        } catch {}
         setHistoryStats(stats);
       }
     } catch {}
