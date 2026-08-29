@@ -41,7 +41,7 @@ export default function Home() {
     error?: string;
     etaSeconds?: number;
   }>({
-    status: 'queued',
+    status: 'idle',
     candidates: 0,
     processed: 0,
     accepted: 0,
@@ -54,6 +54,7 @@ export default function Home() {
   const [selectedQuery, setSelectedQuery] = useState('');
   const [lastSearchRequest, setLastSearchRequest] = useState<SearchRequest | null>(null);
   const currentQueryRef = useRef<string>('');
+  const pollingAbortRef = useRef<boolean>(false);
 
   // Browser Cache for Delivered and Filtered Domains
   const [cachedDelivered, setCachedDelivered] = useState<string[]>([]);
@@ -139,6 +140,7 @@ export default function Home() {
   }, [jobId]);
 
   const handleCancelSearch = useCallback(async () => {
+    pollingAbortRef.current = true;
     if (jobId) {
       try {
         fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' }).catch(() => {});
@@ -190,6 +192,7 @@ export default function Home() {
   }, [fetchHistoryStats]);
 
   const handleSearch = async (request: SearchRequest): Promise<SearchResponse> => {
+    pollingAbortRef.current = false;
     setIsSearching(true);
     setResults([]);
     setJobId(null);
@@ -252,18 +255,20 @@ export default function Home() {
     let consecutiveNetworkErrors = 0;
 
     const poll = async () => {
-      if (!isPollingActive) return;
+      if (!isPollingActive || pollingAbortRef.current) return;
 
       try {
         const res = await fetch(`/api/jobs/${jobId}`);
+        if (pollingAbortRef.current) return;
         if (!res.ok) {
           consecutiveNetworkErrors++;
-          if (isPollingActive) setTimeout(poll, Math.min(2000, 400 + consecutiveNetworkErrors * 200));
+          if (isPollingActive && !pollingAbortRef.current) setTimeout(poll, Math.min(2000, 400 + consecutiveNetworkErrors * 200));
           return;
         }
 
         consecutiveNetworkErrors = 0;
         const data = await res.json();
+        if (pollingAbortRef.current) return;
         const elapsed = (Date.now() - startTime) / 1000;
 
         if (data.status === 'completed' || data.status === 'partial' || (data.accepted >= requestedLimit && data.accepted > 0)) {
@@ -286,6 +291,7 @@ export default function Home() {
           // Resilient fetch loop with retry to ensure results list is fully loaded from backend
           let resultList: any[] = [];
           for (let attempt = 0; attempt < 12; attempt++) {
+            if (pollingAbortRef.current) break;
             try {
               const resultsRes = await fetch(`/api/jobs/${jobId}/results?limit=100000`);
               if (resultsRes.ok) {
@@ -300,18 +306,20 @@ export default function Home() {
             await new Promise(r => setTimeout(r, 150));
           }
 
-          setResults(resultList);
-          if (resultList.length > 0) {
-            saveToHistory(currentQueryRef.current, resultList.length);
-            fetchHistoryStats();
+          if (!pollingAbortRef.current) {
+            setResults(resultList);
+            if (resultList.length > 0) {
+              saveToHistory(currentQueryRef.current, resultList.length);
+              fetchHistoryStats();
 
-            // Cache delivered domains in browser storage so they are never repeated
-            const newDelivered = resultList.map(r => formatProperUrl(r.url || r.domain)).filter(Boolean);
-            setCachedDelivered(prev => {
-              const updated = Array.from(new Set([...prev, ...newDelivered]));
-              try { localStorage.setItem('webscope-cached-delivered-urls', JSON.stringify(updated)); } catch {}
-              return updated;
-            });
+              // Cache delivered domains in browser storage so they are never repeated
+              const newDelivered = resultList.map(r => formatProperUrl(r.url || r.domain)).filter(Boolean);
+              setCachedDelivered(prev => {
+                const updated = Array.from(new Set([...prev, ...newDelivered]));
+                try { localStorage.setItem('webscope-cached-delivered-urls', JSON.stringify(updated)); } catch {}
+                return updated;
+              });
+            }
           }
           setIsSearching(false);
           return;
@@ -351,23 +359,25 @@ export default function Home() {
         const filteredCount = Math.max(0, liveProcessed - liveAccepted);
         setMomentaryInvalidCount(filteredCount);
 
-        setProgress(prev => ({
-          status: 'searching',
-          candidates: Math.max(prev.candidates, liveCandidates),
-          processed: Math.max(prev.processed, liveProcessed),
-          accepted: Math.max(prev.accepted, liveAccepted),
-          blocked: Math.max(prev.blocked, filteredCount),
-          duplicates: Math.max(prev.duplicates, data.duplicates || 0),
-          error: data.error,
-          etaSeconds: scriptLoadEta !== undefined ? scriptLoadEta : prev.etaSeconds,
-        }));
+        if (!pollingAbortRef.current) {
+          setProgress(prev => ({
+            status: 'searching',
+            candidates: Math.max(prev.candidates, liveCandidates),
+            processed: Math.max(prev.processed, liveProcessed),
+            accepted: Math.max(prev.accepted, liveAccepted),
+            blocked: Math.max(prev.blocked, filteredCount),
+            duplicates: Math.max(prev.duplicates, data.duplicates || 0),
+            error: data.error,
+            etaSeconds: scriptLoadEta !== undefined ? scriptLoadEta : prev.etaSeconds,
+          }));
+        }
 
-        if (isPollingActive) {
+        if (isPollingActive && !pollingAbortRef.current) {
           setTimeout(poll, 300);
         }
       } catch (error) {
         consecutiveNetworkErrors++;
-        if (isPollingActive) {
+        if (isPollingActive && !pollingAbortRef.current) {
           setTimeout(poll, Math.min(2500, 600 + consecutiveNetworkErrors * 400));
         }
       }
