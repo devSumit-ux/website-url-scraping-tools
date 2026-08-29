@@ -18,29 +18,34 @@ export async function POST(request: NextRequest) {
       accepted: 0,
     });
 
-    try {
-      await fetchPythonScraper('/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          job_id: job.id,
-          query: searchRequest.query || '',
-          limit: requestedLimit,
-          time_frame: searchRequest.timeFrame && searchRequest.timeFrame !== 'all' ? searchRequest.timeFrame : undefined,
-          country: searchRequest.region || undefined,
-          area: searchRequest.area || undefined,
-          tld: searchRequest.tld || undefined,
-          include_domains: searchRequest.includeDomains,
-          exclude_domains: searchRequest.excludeDomains,
-        }),
-        signal: AbortSignal.timeout(5000),
-      });
-    } catch (e) {
-      console.warn('Backend trigger notice:', e);
+    const pyRes = await fetchPythonScraper('/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_id: job.id,
+        query: searchRequest.query || '',
+        limit: requestedLimit,
+        time_frame: searchRequest.timeFrame && searchRequest.timeFrame !== 'all' ? searchRequest.timeFrame : undefined,
+        country: searchRequest.region || undefined,
+        area: searchRequest.area || undefined,
+        tld: searchRequest.tld || undefined,
+        include_domains: searchRequest.includeDomains,
+        exclude_domains: searchRequest.excludeDomains,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!pyRes.ok) {
+      const errText = await pyRes.text().catch(() => 'Scraper engine rejected request');
+      updateJob(job.id, { status: 'failed', error: errText });
+      return NextResponse.json({ error: `Python engine error: ${errText}` }, { status: 502 });
     }
 
     return NextResponse.json({ jobId: job.id, searchId: job.id, status: 'searching' });
-  } catch {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to start search job' },
+      { status: 500 }
+    );
   }
 }

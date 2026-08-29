@@ -325,9 +325,23 @@ export default function Home() {
           return;
         }
 
-        if (data.status === 'failed' || data.status === 'cancelled') {
+        if (data.status === 'failed' || data.status === 'cancelled' || data.status === 'not_found') {
           isPollingActive = false;
           try { sessionStorage.removeItem('webscope-active-job'); } catch {}
+
+          if (data.status === 'not_found') {
+            setIsSearching(false);
+            setJobId(null);
+            setProgress({
+              status: 'idle',
+              candidates: 0,
+              processed: 0,
+              accepted: 0,
+              blocked: 0,
+              duplicates: 0,
+            });
+            return;
+          }
 
           setProgress(prev => ({
             ...prev,

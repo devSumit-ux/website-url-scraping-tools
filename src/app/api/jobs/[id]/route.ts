@@ -17,10 +17,14 @@ export async function GET(
     let etaSeconds: number | null = null;
     let rate = 0;
     let error = job?.error;
+    let engineResponded = false;
 
     try {
-      const pyRes = await fetchPythonScraper(`/progress/${id}`);
+      const pyRes = await fetchPythonScraper(`/progress/${id}`, {
+        signal: AbortSignal.timeout(4000),
+      });
       if (pyRes.ok) {
+        engineResponded = true;
         const pyData = await pyRes.json();
         if (pyData.candidates !== undefined) candidates = Math.max(candidates, pyData.candidates);
         if (pyData.processed !== undefined) processed = Math.max(processed, pyData.processed);
@@ -44,8 +48,8 @@ export async function GET(
       }
     } catch {}
 
-    if (!job && currentStatus === 'not_found') {
-      return NextResponse.json({ error: 'Job not found' }, { status: 404 });
+    if (!job && !engineResponded) {
+      return NextResponse.json({ error: 'Job not found', status: 'not_found' }, { status: 404 });
     }
 
     return NextResponse.json({
