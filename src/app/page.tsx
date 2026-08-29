@@ -13,10 +13,23 @@ import dynamic from 'next/dynamic';
 
 const HeaderActions = dynamic(() => import('@/components/header-actions').then(mod => ({ default: mod.HeaderActions })), { ssr: false });
 
+interface HistoryStats {
+  total_unique: number;
+  total_urls: number;
+  total_unique_approved?: number;
+  total_filtered_domains?: number;
+  total_known_domains?: number;
+  cloud_connected?: boolean;
+  mongodb_cluster?: string;
+  mongodb_approved?: number;
+  mongodb_filtered?: number;
+  mongodb_sessions?: number;
+}
+
 export default function Home() {
   const [isSearching, setIsSearching] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
-  const [historyStats, setHistoryStats] = useState<{ total_unique: number; total_urls: number } | null>(null);
+  const [historyStats, setHistoryStats] = useState<HistoryStats | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [progress, setProgress] = useState<{
     status: string;
