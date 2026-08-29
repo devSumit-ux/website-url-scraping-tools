@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJob, addJobResults } from '@/lib/job-store';
+import { fetchPythonScraper } from '@/lib/python-api';
 
 function formatProperUrl(urlOrDomain: string): string {
   if (!urlOrDomain) return '';
@@ -13,8 +14,6 @@ function formatProperUrl(urlOrDomain: string): string {
   }
   return `https://www.${d}`;
 }
-
-const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
 
 export async function GET(
   request: NextRequest,
@@ -33,8 +32,7 @@ export async function GET(
     // If memory store doesn't have results yet, fetch directly from Python backend
     if (resultsList.length === 0) {
       try {
-        const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/results/${id}`, {
-          cache: 'no-store',
+        const pyRes = await fetchPythonScraper(`/results/${id}`, {
           signal: AbortSignal.timeout(10000)
         });
         if (pyRes.ok) {
@@ -61,15 +59,16 @@ export async function GET(
       } catch {}
     }
 
-    const results = resultsList.slice(offset, offset + limit);
+    const paginatedResults = resultsList.slice(offset, offset + limit);
 
     return NextResponse.json({
-      results,
+      results: paginatedResults,
       total: resultsList.length,
       limit,
       offset,
+      hasMore: offset + limit < resultsList.length,
     });
   } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to fetch results' }, { status: 500 });
   }
 }

@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
+import { fetchPythonScraper } from '@/lib/python-api';
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const format = searchParams.get('format') || 'json';
 
-    const endpoint = format === 'csv' ? `${PYTHON_SCRAPER_URL}/cache/export/csv` : `${PYTHON_SCRAPER_URL}/cache/export`;
-    const res = await fetch(endpoint, { cache: 'no-store' });
+    const endpoint = format === 'csv' ? '/cache/export/csv' : '/cache/export';
+    const res = await fetchPythonScraper(endpoint);
 
     if (!res.ok) {
       return NextResponse.json({ error: 'Failed to fetch cache export from engine' }, { status: res.status });
@@ -28,7 +27,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Unknown export error' },
+      { error: error instanceof Error ? error.message : 'Failed to export cache' },
       { status: 500 }
     );
   }

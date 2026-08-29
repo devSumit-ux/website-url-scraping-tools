@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server';
-
-const PYTHON_API_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
+import { fetchPythonScraper } from '@/lib/python-api';
 
 export async function GET() {
   try {
-    const res = await fetch(`${PYTHON_API_URL}/history/stats`, {
-      cache: 'no-store',
+    const res = await fetchPythonScraper('/history/stats', {
       signal: AbortSignal.timeout(5000)
     });
     if (!res.ok) {
@@ -20,7 +18,7 @@ export async function GET() {
 
 export async function POST() {
   try {
-    const res = await fetch(`${PYTHON_API_URL}/history/clear`, {
+    const res = await fetchPythonScraper('/history/clear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(5000)

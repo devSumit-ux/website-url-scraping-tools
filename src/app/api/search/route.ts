@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createJob, updateJob } from '@/lib/job-store';
 import { SearchRequest } from '@/lib/types';
-
-const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
+import { fetchPythonScraper } from '@/lib/python-api';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,7 +19,7 @@ export async function POST(request: NextRequest) {
     });
 
     try {
-      await fetch(`${PYTHON_SCRAPER_URL}/search`, {
+      await fetchPythonScraper('/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

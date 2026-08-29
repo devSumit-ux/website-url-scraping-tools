@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJob, updateJob } from '@/lib/job-store';
-
-const PYTHON_SCRAPER_URL = process.env.PYTHON_SCRAPER_URL || process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
+import { fetchPythonScraper } from '@/lib/python-api';
 
 export async function GET(
   request: NextRequest,
@@ -20,7 +19,7 @@ export async function GET(
     let error = job?.error;
 
     try {
-      const pyRes = await fetch(`${PYTHON_SCRAPER_URL}/progress/${id}`, { cache: 'no-store' });
+      const pyRes = await fetchPythonScraper(`/progress/${id}`);
       if (pyRes.ok) {
         const pyData = await pyRes.json();
         if (pyData.candidates !== undefined) candidates = Math.max(candidates, pyData.candidates);
@@ -62,11 +61,8 @@ export async function GET(
       etaSeconds,
       rate,
       error,
-      createdAt: job?.createdAt || new Date().toISOString(),
-      startedAt: job?.startedAt,
-      completedAt: job?.completedAt,
     });
   } catch {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Invalid job request' }, { status: 500 });
   }
 }

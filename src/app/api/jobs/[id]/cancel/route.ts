@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { updateJob } from '@/lib/job-store';
+import { fetchPythonScraper } from '@/lib/python-api';
 
 export async function POST(
   request: NextRequest,
@@ -13,7 +14,7 @@ export async function POST(
     });
 
     try {
-      await fetch(`http://localhost:8000/cancel/${id}`, { method: 'POST' });
+      await fetchPythonScraper(`/cancel/${id}`, { method: 'POST' });
     } catch {}
 
     return NextResponse.json({ status: 'cancelled', jobId: id });
