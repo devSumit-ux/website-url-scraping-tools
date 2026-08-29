@@ -30,8 +30,7 @@ app = FastAPI(title="WebScope Scraping Engine", version="2.0.0")
 
 @app.on_event("startup")
 async def on_startup():
-    loop = asyncio.get_running_loop()
-    loop.run_in_executor(None, GlobalDomainRegistry.initialize)
+    asyncio.create_task(asyncio.to_thread(GlobalDomainRegistry.initialize))
 
 app.add_middleware(
     CORSMiddleware,
