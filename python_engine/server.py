@@ -119,7 +119,7 @@ async def sync_cache_to_mongo():
     """Force synchronization from local files to MongoDB Atlas cloud database"""
     if MongoCacheStorage:
         storage = MongoCacheStorage.get_instance()
-        res = storage.sync_local_to_mongo()
+        res = await asyncio.to_thread(storage.sync_local_to_mongo)
         return JSONResponse(content=res)
     return JSONResponse(content={"status": "pymongo_unavailable"})
 
@@ -128,7 +128,7 @@ async def import_cache_json(payload: Dict[str, Any]):
     """Import external JSON cache data into MongoDB Atlas"""
     if MongoCacheStorage:
         storage = MongoCacheStorage.get_instance()
-        res = storage.import_cache_data(payload)
+        res = await asyncio.to_thread(storage.import_cache_data, payload)
         return JSONResponse(content=res)
     return JSONResponse(content={"status": "pymongo_unavailable"})
 
@@ -139,30 +139,33 @@ async def upload_browser_urls(payload: Dict[str, Any]):
     if not urls:
         return JSONResponse(content={"uploaded": 0, "status": "empty_list"})
 
-    domains = []
-    for u in urls:
-        d = DomainValidator.extract_root_domain(u)
-        if d:
-            domains.append(d)
+    def _sync_in_thread():
+        domains = []
+        for u in urls:
+            d = DomainValidator.extract_root_domain(u)
+            if d:
+                domains.append(d)
 
-    if MongoCacheStorage:
-        storage = MongoCacheStorage.get_instance()
-        upserted = storage.save_bulk_domains(domains, urls)
-        stats = storage.get_stats()
-        return JSONResponse(content={
-            "status": "success",
-            "uploaded_urls": len(urls),
-            "upserted_unique": upserted,
-            "total_in_mongo": stats.get("total_unique_approved", 0)
-        })
+        if MongoCacheStorage:
+            storage = MongoCacheStorage.get_instance()
+            upserted = storage.save_bulk_domains(domains, urls)
+            stats = storage.get_stats()
+            return {
+                "status": "success",
+                "uploaded_urls": len(urls),
+                "upserted_unique": upserted,
+                "total_in_mongo": stats.get("total_unique_approved", 0)
+            }
 
-    # Local fallback
-    history = HistoryLogger.load_history()
-    for d in domains:
-        history['domains'].add(d)
-    for u in urls:
-        history['urls'].add(u)
-    return JSONResponse(content={"status": "saved_locally", "uploaded_urls": len(urls), "total_unique": len(history['domains'])})
+        history = HistoryLogger.load_history()
+        for d in domains:
+            history['domains'].add(d)
+        for u in urls:
+            history['urls'].add(u)
+        return {"status": "saved_locally", "uploaded_urls": len(urls), "total_unique": len(history['domains'])}
+
+    result = await asyncio.to_thread(_sync_in_thread)
+    return JSONResponse(content=result)
 
 @app.get("/progress/{job_id}")
 async def get_progress(job_id: str):

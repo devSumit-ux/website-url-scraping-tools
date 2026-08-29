@@ -45,7 +45,7 @@ export async function fetchPythonScraper(path: string, init?: RequestInit): Prom
       method,
       headers,
       agent: false,
-      timeout: 8000,
+      timeout: 30000,
     }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (chunk) => chunks.push(chunk));

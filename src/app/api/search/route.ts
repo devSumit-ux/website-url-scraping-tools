@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
         include_domains: searchRequest.includeDomains,
         exclude_domains: searchRequest.excludeDomains,
       }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(25000),
     });
 
     if (!pyRes.ok) {

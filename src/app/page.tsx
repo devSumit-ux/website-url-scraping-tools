@@ -93,16 +93,12 @@ export default function Home() {
 
       const storedDelivered = localStorage.getItem('webscope-cached-delivered-urls');
       if (storedDelivered) {
-        const parsed = JSON.parse(storedDelivered);
-        setCachedDelivered(parsed);
-        // Automatically sync browser cached URLs to MongoDB Atlas in background
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          fetch('/api/cache/upload-browser-urls', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: parsed }),
-          }).then(() => fetchHistoryStats()).catch(() => {});
-        }
+        try {
+          const parsed = JSON.parse(storedDelivered);
+          if (Array.isArray(parsed)) {
+            setCachedDelivered(parsed);
+          }
+        } catch {}
       }
 
       try {
