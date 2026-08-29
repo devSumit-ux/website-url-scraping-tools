@@ -59,4 +59,10 @@ __pycache__/
 *.so
 .pytest_cache/
 python_engine/__pycache__/
+python_engine/venv/
+.venv/
+venv/
+*.egg-info/
+python_engine/sessions_history.jsonl
+
 
