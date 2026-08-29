@@ -19,44 +19,120 @@
 
 ## ⚡ Overview
 
-**WebScope** is a full-stack website discovery and URL scraping platform engineered for large-scale data collection. It combines a high-concurrency **FastAPI/AsyncIO Python engine** with a modern **Next.js 16 web interface** and **MongoDB Atlas cloud persistence**.
+**WebScope** is an enterprise-grade website discovery and URL scraping platform engineered for large-scale, high-concurrency web data collection. It pairs a **FastAPI/AsyncIO Python engine** with a modern **Next.js 16 web interface** and **MongoDB Atlas cloud persistence**.
 
-The system discovers, validates, and stores verified apex root websites (`https://www.example.com`) across global search indexes while eliminating subdomains, parked domains, redirects, and duplicate entries.
-
----
-
-## ✨ Key Features
-
-- **Multi-Source Parallel Discovery**: Aggregates candidate websites simultaneously from DuckDuckGo, Bing, Yahoo, Wikipedia, Reddit, GitHub, HackerNews, and Brave.
-- **Strict Apex Root Normalization**: Enforces canonical URL formatting (`https://www.domain.com`) with complete multi-part TLD support (`.co.uk`, `.com.au`, `.co.in`, `.ac.jp`, `.gov.uk`, etc.).
-- **Global Zero-Duplicate Registry**: Centralized, multi-user deduplication ensuring concurrent searches across different browsers/devices never return overlapping websites.
-- **MongoDB Atlas Cloud Persistence**: Real-time cloud synchronization storing all approved URLs, filtered domains, and search session logs with local JSON fallback.
-- **Live HTTP Health & Quality Inspection**: Asynchronous DNS and HTTP probe validation verifying genuine 200 OK responses and filtering parked or blank pages.
-- **Real-Time Progress Streaming**: Dynamic ETA calculations, discovery throughput rate monitoring, and live accepted vs. filtered counters.
-- **Modern Responsive UI**: Clean interface built with Next.js 16, Tailwind CSS, Lucide icons, search session history viewer, and one-click clipboard exports.
+The platform discovers, sanitizes, inspects, and delivers verified canonical apex websites (`https://www.example.com`) across global search indexes while eliminating subdomains, parked domains, redirects, and duplicates.
 
 ---
 
-## 🏗 System Architecture
+## 🔬 How The Scraping Engine Works (Deep Dive)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    WebScope Web UI (Next.js)                │
-│             http://localhost:3000 (React 19 / TS)           │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTP / JSON API
-┌──────────────────────────────▼──────────────────────────────┐
-│             Python Scraping Server (FastAPI / Uvicorn)      │
-│             http://127.0.0.1:8000                           │
-├─────────────────────────────────────────────────────────────┤
-│  • Multi-Source Parallel Search (DDG, Bing, Yahoo, etc.)    │
-│  • GlobalDomainRegistry (Thread-Safe Deduplication)         │
-│  • DomainValidator & Live HTTP Inspection                   │
-├──────────────────────────────┬──────────────────────────────┤
-│  MongoDB Cloud Cache         │  Local Fallback Storage      │
-│  (MongoDB Atlas Cluster)     │  (scraped_history.json)      │
-└──────────────────────────────┴──────────────────────────────┘
+                       User Search Request ("hospital in texas")
+                                         │
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │ 1. Query Expansion & Parallel Engine Harvest  │
+                 │   • DuckDuckGo  • Bing        • Yahoo         │
+                 │   • Wikipedia   • Reddit      • GitHub        │
+                 │   • HackerNews  • Brave       • Targeted Dorks│
+                 └───────────────────────┬───────────────────────┘
+                                         │ Raw HTML & Outbound Links
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │ 2. Canonical Apex Domain Extraction           │
+                 │   • Strip Subdomains (blog.dept.hospital.com) │
+                 │   • Multi-Part TLD (.co.uk, .com.au, .co.in)  │
+                 │   • Format -> https://www.hospital.com        │
+                 └───────────────────────┬───────────────────────┘
+                                         │ Normalized Candidate Root
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │ 3. Quality & Anti-Spam Heuristic Filter       │
+                 │   • Reject digits in domain (0-9)             │
+                 │   • Reject sequential patterns (xyza, xyzb)   │
+                 │   • Reject blacklisted & aggregator domains   │
+                 └───────────────────────┬───────────────────────┘
+                                         │ Valid Domain Candidate
+                                         ▼
+    ┌────────────────────────────────────────────────────────────────────────┐
+    │ 4. MULTI-LAYER ZERO-DUPLICATE VERIFICATION GATEWAY                     │
+    │   • Layer 1: In-Flight Lock (Prevents race conditions across workers)  │
+    │   • Layer 2: GlobalDomainRegistry Memory Cache (O(1) instant check)   │
+    │   • Layer 3: MongoDB Atlas Cloud Registry (61,000+ approved URLs)      │
+    │   • Layer 4: Local History Cache (scraped_history.json fallback)       │
+    └────────────────────────────────────┬───────────────────────────────────┘
+                                         │ Brand New, Unseen Domain
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │ 5. Asynchronous Live HTTP & Content Probe     │
+                 │   • DNS Resolution & TCP handshake            │
+                 │   • 200 OK verification (No 4xx/5xx/timeouts) │
+                 │   • Anti-Parked/Empty page heuristic analysis │
+                 │   • Extract page <title>, meta & word count   │
+                 └───────────────────────┬───────────────────────┘
+                                         │ Verified Live Website
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │ 6. Real-Time Delivery & Cloud Persistence     │
+                 │   • Stream to UI progress buffer              │
+                 │   • Atomic Upsert to MongoDB Atlas            │
+                 │   • Append to local persistent cache          │
+                 └───────────────────────────────────────────────┘
 ```
+
+---
+
+## 🛡 Guaranteed Zero-Duplicate Architecture
+
+WebScope enforces **4 independent layers of deduplication**, guaranteeing that no URL is ever approved or delivered more than once across concurrent user sessions, multiple devices, or repeated searches:
+
+### 1. Real-Time In-Flight Mutex (`_in_flight_domains`)
+- When a candidate domain is discovered by an async worker, the engine acquires an atomic asynchronous lock.
+- If another parallel worker or concurrent user query is evaluating the same domain at the exact same millisecond, the second attempt is immediately discarded.
+
+### 2. Thread-Safe Global Memory Registry (`GlobalDomainRegistry`)
+- Pre-loaded with all known approved and filtered domains from persistent storage.
+- Performs an $O(1)$ memory lookup before initiating any DNS lookup or HTTP request, eliminating redundant network overhead.
+
+### 3. MongoDB Atlas Cloud Unique Indexing
+- In MongoDB Atlas, the `approved_urls` collection enforces a **strict unique compound index** on `{ domain: 1 }`.
+- Operations use atomic bulk `$setOnInsert` and `$set` upserts, guaranteeing that even distributed server instances cannot write duplicate records.
+
+### 4. Local File Persistence Fallback (`scraped_history.json`)
+- Every approved and filtered domain is mirrored into a local JSON cache file.
+- If cloud connectivity is temporarily interrupted, the system automatically uses the local persistence cache to maintain 100% deduplication guarantees.
+
+---
+
+## 🌐 Search Engines & Discovery Strategy
+
+WebScope scrapes from **8 primary search providers and knowledge indexes** simultaneously:
+
+1. **DuckDuckGo HTML & Lite Engines**: Organic search results without tracker bias.
+2. **Bing Web Index**: Broad regional and commercial website listings.
+3. **Yahoo Search**: Deep-indexed catalog queries.
+4. **Wikipedia External Link Tree**: Authority outbound links cited in encyclopedic articles.
+5. **Reddit & HackerNews Discussions**: Curated real-world project and organizational sites.
+6. **GitHub Repositories**: Organization homepages and official project websites.
+7. **Brave Search API / Discovery**: Independent web index crawlers.
+8. **Smart Search Dorks**: Dynamic query transformation (`inurl:`, `site:`, `related:`, and country-code operators).
+
+---
+
+## 📏 Quality & Compliance Rules
+
+Every candidate URL must satisfy the following strict compliance rules before being accepted:
+
+| Rule | Description | Status |
+| :--- | :--- | :---: |
+| **Strict Apex Root** | Subdomains are stripped to canonical root (`https://www.domain.com`) | ✅ Enforced |
+| **No Numeric Domains** | Domains containing numbers (0–9) are rejected | ✅ Enforced |
+| **No Sequential Patterns** | Series patterns (e.g. `xyza`, `xyzb`, `xyzc`) are blocked | ✅ Enforced |
+| **Multi-Part TLD Support** | Accurately resolves `.co.uk`, `.com.au`, `.co.in`, `.ac.jp`, etc. | ✅ Enforced |
+| **Live 200 OK Response** | Only responds with valid HTTP 200 without request timeouts | ✅ Enforced |
+| **Anti-Parked Filter** | Parked, for-sale, placeholder, or blank pages are rejected | ✅ Enforced |
+| **Zero Redirection** | URLs redirecting to external domains or subdomains are filtered | ✅ Enforced |
 
 ---
 
@@ -65,14 +141,14 @@ The system discovers, validates, and stores verified apex root websites (`https:
 ```
 website-url-scraping-tools/
 ├── python_engine/                  # High-Performance Python Backend
-│   ├── scraper_engine.py          # Core scraping engine & domain validation logic
+│   ├── scraper_engine.py          # Core scraping engine, discovery & validation logic
 │   ├── mongo_storage.py           # MongoDB Atlas persistence & cloud caching layer
 │   ├── server.py                  # FastAPI REST API endpoints
 │   ├── requirements.txt           # Python package dependencies
-│   └── scraped_history.json       # Local persistence cache fallback
+│   └── scraped_history.json       # Local persistence cache (61,000+ domains)
 ├── src/                            # Next.js 16 Web Application
 │   ├── app/                       # App router pages and API routes
-│   │   ├── api/                   # Server-side API route handlers
+│   │   ├── api/                   # Server-side API route handlers & proxy
 │   │   ├── layout.tsx             # Root layout & theme configuration
 │   │   └── page.tsx               # Main scraper search dashboard
 │   ├── components/                # Modular React UI components
@@ -130,17 +206,19 @@ Copy the example environment configuration:
 cp .env.example .env
 ```
 
-*(Optional)* Configure your MongoDB Atlas URI in `.env` or `webscopecred.env`:
+*(Optional)* Configure your MongoDB Atlas URI in `.env`:
 ```env
+PYTHON_SCRAPER_PORT=8000
+PYTHON_SCRAPER_URL=http://127.0.0.1:8000
 MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.usvfwut.mongodb.net
 ```
-*Note: If no MongoDB credentials are provided, WebScope automatically falls back to local file persistence (`scraped_history.json`).*
+*Note: If no MongoDB URI is supplied, WebScope automatically falls back to local file persistence (`scraped_history.json`).*
 
 ---
 
 ### 4. Run Locally
 
-You can launch both the **Python Scraping Engine** (Port 8000) and **Next.js Web App** (Port 3000) simultaneously with one command:
+Start both the **Python Scraping Engine** (Port 8000) and **Next.js Web App** (Port 3000) simultaneously with one command:
 
 ```bash
 npm run dev:all
@@ -176,17 +254,17 @@ The FastAPI backend runs on port `8000` (and is proxied via Next.js at `/api/*`)
 
 ---
 
-## 🚢 Deployment
+## 🚢 Production Deployment
 
 ### Deploy on Render.com
 
-This repository includes a pre-configured `render.yaml` and `start.sh` for one-click full-stack deployment on Render:
+This repository includes a pre-configured `render.yaml` and `start.sh` for one-click full-stack deployment:
 
 1. Create a new **Web Service** on [Render](https://render.com/).
-2. Select your repository.
-3. Build Command: `npm install && pip install -r python_engine/requirements.txt && npm run build`
-4. Start Command: `./start.sh`
-5. Add your `MONGODB_URI` under Environment Variables.
+2. Connect your GitHub repository.
+3. **Build Command**: `npm install && pip install -r python_engine/requirements.txt && npm run build`
+4. **Start Command**: `./start.sh`
+5. Set `MONGODB_URI` under Environment Variables.
 
 ---
 
