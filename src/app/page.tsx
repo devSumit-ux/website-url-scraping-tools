@@ -50,7 +50,6 @@ export default function Home() {
   });
   const [results, setResults] = useState<SearchResult[]>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [showRules, setShowRules] = useState(false);
   const [history, setHistory] = useState<Array<{ id: string; query: string; timestamp: number; count: number }>>([]);
   const [selectedQuery, setSelectedQuery] = useState('');
   const [lastSearchRequest, setLastSearchRequest] = useState<SearchRequest | null>(null);
@@ -451,13 +450,6 @@ export default function Home() {
             </Link>
             <nav className="hidden md:flex items-center gap-5 text-xs font-medium tracking-wide uppercase text-muted-foreground" suppressHydrationWarning>
               <Link href="/" className="text-foreground transition-colors hover:text-foreground">URL Scraper</Link>
-              <button 
-                type="button" 
-                onClick={() => setShowRules(!showRules)} 
-                className="hover:text-foreground transition-colors"
-              >
-                Upload Rules & Compliance
-              </button>
             </nav>
           </div>
           <div className="flex items-center gap-2" suppressHydrationWarning>
@@ -518,61 +510,6 @@ export default function Home() {
               initialQuery={selectedQuery}
               initialRequest={lastSearchRequest}
             />
-
-            {/* Official Rules & Regulations Card */}
-            <div className="mt-12 max-w-3xl mx-auto">
-              <div className="rounded-lg border border-border bg-card p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-4 border-b border-border pb-3">
-                  <div className="flex items-center gap-2">
-                    <Info className="h-4 w-4 text-primary" />
-                    <h2 className="text-sm font-semibold tracking-wide uppercase text-foreground">
-                      Rules & Regulations for URL Uploading
-                    </h2>
-                  </div>
-                  <span className="text-[11px] font-mono text-muted-foreground">Compliance Standards</span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-muted-foreground leading-relaxed">
-                  <div className="space-y-2.5">
-                    <div className="flex items-start gap-2">
-                      <Ban className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
-                      <span><strong>Redirected sites not accepted:</strong> Any site redirecting to external domains or subdomains is filtered out.</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Ban className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
-                      <span><strong>Subdomains not accepted:</strong> Only apex root domains formatted as <code className="text-foreground">https://www.domainName.com</code>.</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Ban className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
-                      <span><strong>Numeric values not accepted in URL:</strong> Domain names containing numeric digits (0–9) are prohibited.</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                      <span><strong>Proper URL format:</strong> Must start with <code className="text-foreground">http://www.</code> or <code className="text-foreground">https://www.</code> followed by valid apex domain.</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2.5">
-                    <div className="flex items-start gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                      <span><strong>Valid content required:</strong> Garbage, parked, or empty pages without content are strictly rejected.</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Ban className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
-                      <span><strong>No contiguous or series pattern URLs:</strong> Sequential alphabet/numeric patterns (e.g. xyza, xyzb, xyzc) are blocked.</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                      <span><strong>Accessible & live response:</strong> URLs must respond with 200 OK without request timeouts.</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Info className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
-                      <span><strong>Instant Invalid Count:</strong> Invalid URL counts are shown at that moment only and not stored permanently in the system.</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
