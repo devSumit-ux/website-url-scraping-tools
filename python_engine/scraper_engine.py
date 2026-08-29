@@ -798,8 +798,15 @@ class SiteChecker:
 class HistoryLogger:
     """Manages persistent history in MongoDB Atlas cloud cache and local scraped_history.json."""
 
-    @staticmethod
-    def load_history() -> Dict[str, Set[str]]:
+    _cached_history: Optional[Dict[str, Set[str]]] = None
+    _last_history_load_time: float = 0.0
+
+    @classmethod
+    def load_history(cls, force_reload: bool = False) -> Dict[str, Set[str]]:
+        now = time.time()
+        if not force_reload and cls._cached_history is not None and (now - cls._last_history_load_time < 30.0):
+            return cls._cached_history
+
         domains = set()
         filtered = set()
         stems = set()
@@ -831,13 +838,16 @@ class HistoryLogger:
             except Exception:
                 pass
 
-        return {
+        res = {
             'domains': domains,
             'filtered_domains': filtered,
             'all_known_domains': domains | filtered,
             'stems': stems,
             'urls': urls,
         }
+        cls._cached_history = res
+        cls._last_history_load_time = now
+        return res
 
     @staticmethod
     def save_accepted_domain(url: str, domain: str, query: str = ""):

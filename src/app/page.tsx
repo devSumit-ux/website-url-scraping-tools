@@ -109,19 +109,61 @@ export default function Home() {
     try { sessionStorage.removeItem('webscope-active-job'); } catch {}
   }, [jobId]);
 
+  const [isUploadingBrowserCache, setIsUploadingBrowserCache] = useState(false);
+
   const fetchHistoryStats = useCallback(async () => {
     try {
-      const res = await fetch('/api/history');
-      if (res.ok) {
-        const data = await res.json();
-        setHistoryStats(data);
+      const [resHistory, resCache] = await Promise.allSettled([
+        fetch('/api/history'),
+        fetch('/api/cache/stats')
+      ]);
+
+      let stats: any = {};
+      if (resHistory.status === 'fulfilled' && resHistory.value.ok) {
+        stats = await resHistory.value.json();
+      }
+      if (resCache.status === 'fulfilled' && resCache.value.ok) {
+        const cacheData = await resCache.value.json();
+        stats = { ...stats, ...cacheData };
+      }
+
+      if (Object.keys(stats).length > 0) {
+        setHistoryStats(stats);
       }
     } catch {}
   }, []);
 
   useEffect(() => {
     fetchHistoryStats();
+    const interval = setInterval(fetchHistoryStats, 6000);
+    return () => clearInterval(interval);
   }, [fetchHistoryStats]);
+
+  const handleUploadBrowserCacheToMongo = async () => {
+    if (cachedDelivered.length === 0) {
+      showToast('No browser cached URLs to upload');
+      return;
+    }
+    setIsUploadingBrowserCache(true);
+    try {
+      const res = await fetch('/api/cache/upload-browser-urls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: cachedDelivered }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Uploaded ${data.uploaded_urls?.toLocaleString() || cachedDelivered.length} URLs to MongoDB Atlas!`);
+        await fetchHistoryStats();
+      } else {
+        showToast('Failed to upload browser cache');
+      }
+    } catch {
+      showToast('Upload error');
+    } finally {
+      setIsUploadingBrowserCache(false);
+    }
+  };
 
   const handleClearHistoryLog = async () => {
     try {
@@ -459,28 +501,41 @@ export default function Home() {
             </div>
 
             {/* Browser Cache & History Deduplication Banner */}
-            <div className="max-w-xl mx-auto mb-6 p-3 rounded-md bg-muted/40 border border-border/80 text-xs text-muted-foreground flex flex-col sm:flex-row items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2">
-                <Database className="h-3.5 w-3.5 text-primary shrink-0" />
+            <div className="max-w-2xl mx-auto mb-6 p-3.5 rounded-lg bg-muted/40 border border-border/80 text-xs text-muted-foreground flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <Database className="h-4 w-4 text-emerald-500 shrink-0" />
                 <span>
-                  <strong className="text-foreground">{cachedDelivered.length.toLocaleString()}</strong> URLs cached in browser · <strong className="text-foreground">{historyStats?.total_unique || 0}</strong> logged in backend
+                  <strong className="text-foreground font-semibold">
+                    {(historyStats?.mongodb_approved || historyStats?.total_unique || 0).toLocaleString()}
+                  </strong> Global URLs in MongoDB Cloud · <strong className="text-foreground font-semibold">{cachedDelivered.length.toLocaleString()}</strong> in local browser
                 </span>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                {cachedDelivered.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleUploadBrowserCacheToMongo}
+                    disabled={isUploadingBrowserCache}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs transition-colors shadow-xs"
+                    title="Upload all your browser cached URLs to MongoDB Atlas cloud database"
+                  >
+                    {isUploadingBrowserCache ? 'Uploading...' : '⬆ Upload to MongoDB'}
+                  </button>
+                )}
                 {cachedDelivered.length > 0 && (
                   <button
                     type="button"
                     onClick={handleClearBrowserCache}
                     className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
                   >
-                    Clear Browser Cache
+                    Clear Local
                   </button>
                 )}
-                {historyStats && historyStats.total_unique > 0 && (
+                {historyStats && (historyStats.total_unique > 0 || historyStats.mongodb_approved > 0) && (
                   <button
                     type="button"
                     onClick={handleClearHistoryLog}
-                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                    className="text-xs text-muted-foreground hover:text-destructive underline underline-offset-2 transition-colors"
                   >
                     Reset DB Log
                   </button>

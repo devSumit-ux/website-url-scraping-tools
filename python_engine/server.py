@@ -136,6 +136,38 @@ async def import_cache_json(payload: Dict[str, Any]):
         return JSONResponse(content=res)
     return JSONResponse(content={"status": "pymongo_unavailable"})
 
+@app.post("/cache/upload-browser-urls")
+async def upload_browser_urls(payload: Dict[str, Any]):
+    """Upload browser cached URLs directly into MongoDB Atlas cloud database"""
+    urls = payload.get("urls", [])
+    if not urls:
+        return JSONResponse(content={"uploaded": 0, "status": "empty_list"})
+
+    domains = []
+    for u in urls:
+        d = DomainValidator.extract_root_domain(u)
+        if d:
+            domains.append(d)
+
+    if MongoCacheStorage:
+        storage = MongoCacheStorage.get_instance()
+        upserted = storage.save_bulk_domains(domains, urls)
+        stats = storage.get_stats()
+        return JSONResponse(content={
+            "status": "success",
+            "uploaded_urls": len(urls),
+            "upserted_unique": upserted,
+            "total_in_mongo": stats.get("total_unique_approved", 0)
+        })
+
+    # Local fallback
+    history = HistoryLogger.load_history()
+    for d in domains:
+        history['domains'].add(d)
+    for u in urls:
+        history['urls'].add(u)
+    return JSONResponse(content={"status": "saved_locally", "uploaded_urls": len(urls), "total_unique": len(history['domains'])})
+
 @app.get("/progress/{job_id}")
 async def get_progress(job_id: str):
     """Return live progress, rate, and workload-based dynamic ETA for an active scraping job"""
