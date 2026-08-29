@@ -1409,6 +1409,11 @@ class ScrapingEngine:
         self.total_processed = 0
         self.pending_results_buffer: List[Dict] = []
         self.pending_filtered_buffer: Set[str] = set()
+        self._is_cancelled = False
+
+    def cancel(self):
+        """Immediately stop all in-flight workers and abort scraping."""
+        self._is_cancelled = True
 
     async def __aenter__(self):
         if not self.session or self.session.closed:

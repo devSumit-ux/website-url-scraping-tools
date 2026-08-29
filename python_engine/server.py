@@ -219,14 +219,23 @@ async def get_history_sessions(limit: int = 50):
     return JSONResponse(content={"sessions": sessions, "total_sessions": len(sessions)})
 
 RUNNING_TASKS: Dict[str, asyncio.Task] = {}
+ACTIVE_ENGINES: Dict[str, Any] = {}
 
 @app.post("/cancel/{job_id}")
 @app.get("/cancel/{job_id}")
 async def cancel_job(job_id: str):
     """Cancel an active scraping job immediately and terminate background workers"""
+    engine = ACTIVE_ENGINES.pop(job_id, None)
+    if engine and hasattr(engine, 'cancel'):
+        try:
+            engine.cancel()
+        except Exception:
+            pass
+
     task = RUNNING_TASKS.pop(job_id, None)
     if task and not task.done():
         task.cancel()
+
     ACTIVE_JOBS[job_id] = {
         'status': 'cancelled',
         'candidates': 0,
@@ -238,6 +247,26 @@ async def cancel_job(job_id: str):
     }
     return JSONResponse(content={"status": "cancelled", "job_id": job_id})
 
+@app.post("/cancel-all")
+@app.get("/cancel-all")
+async def cancel_all_jobs():
+    """Cancel all active scraping jobs immediately"""
+    for job_id, engine in list(ACTIVE_ENGINES.items()):
+        if engine and hasattr(engine, 'cancel'):
+            try:
+                engine.cancel()
+            except Exception:
+                pass
+    ACTIVE_ENGINES.clear()
+
+    for job_id, task in list(RUNNING_TASKS.items()):
+        if task and not task.done():
+            task.cancel()
+        if job_id in ACTIVE_JOBS:
+            ACTIVE_JOBS[job_id]['status'] = 'cancelled'
+    RUNNING_TASKS.clear()
+    return JSONResponse(content={"status": "all_cancelled"})
+
 async def _run_scrape_task(job_id: str, query: str, limit: int, country: Optional[str], time_frame: Optional[str] = None, area: Optional[str] = None, tld: Optional[str] = None, include_domains: Optional[List[str]] = None, exclude_domains: Optional[List[str]] = None):
     """Background runner that executes scraping until target is 100% finished without blocking HTTP sockets"""
     start_ts = time.time()
@@ -248,6 +277,7 @@ async def _run_scrape_task(job_id: str, query: str, limit: int, country: Optiona
     engine = None
     try:
         engine = ScrapingEngine(max_concurrent=min(1200, max(500, limit * 10)))
+        ACTIVE_ENGINES[job_id] = engine
 
         def on_progress(data):
             now = time.time()

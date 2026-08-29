@@ -105,11 +105,38 @@ export default function Home() {
       }
 
       try {
+        const prevActiveJob = sessionStorage.getItem('webscope-active-job');
+        if (prevActiveJob) {
+          fetch(`/api/jobs/${prevActiveJob}/cancel`, { method: 'POST' }).catch(() => {});
+          sessionStorage.removeItem('webscope-active-job');
+        }
         localStorage.removeItem('webscope-cached-filtered-domains');
-        sessionStorage.removeItem('webscope-active-job');
       } catch {}
     } catch {}
   }, []);
+
+  // Automatically terminate backend scraping processes if user refreshes or closes the page
+  useEffect(() => {
+    const handleUnload = () => {
+      const activeJob = jobId || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('webscope-active-job') : null);
+      if (activeJob) {
+        try {
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon(`/api/jobs/${activeJob}/cancel`);
+          } else {
+            fetch(`/api/jobs/${activeJob}/cancel`, { method: 'POST', keepalive: true }).catch(() => {});
+          }
+        } catch {}
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+    };
+  }, [jobId]);
 
   const handleCancelSearch = useCallback(async () => {
     if (jobId) {
