@@ -1,57 +1,16 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { History, Trash2, Download, Cloud, RefreshCw, CheckCircle2, FileSpreadsheet, FileCode } from 'lucide-react';
+import React, { useState } from 'react';
+import { History, Download, FileSpreadsheet, FileCode } from 'lucide-react';
 
 interface HeaderActionsProps {
   onHistoryClick: () => void;
-  onClearClick: () => void;
-  historyCount: number;
+  onClearClick?: () => void;
+  historyCount?: number;
 }
 
-export function HeaderActions({ onHistoryClick, onClearClick, historyCount }: HeaderActionsProps) {
+export function HeaderActions({ onHistoryClick }: HeaderActionsProps) {
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const [cloudConnected, setCloudConnected] = useState(false);
-  const [mongoCount, setMongoCount] = useState<number | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
-
-  useEffect(() => {
-    async function checkCloudStatus() {
-      try {
-        const res = await fetch('/api/cache/stats');
-        if (res.ok) {
-          const data = await res.json();
-          setCloudConnected(Boolean(data.cloud_connected));
-          if (typeof data.mongodb_approved === 'number') {
-            setMongoCount(data.mongodb_approved);
-          }
-        }
-      } catch {
-        setCloudConnected(false);
-      }
-    }
-    checkCloudStatus();
-    const interval = setInterval(checkCloudStatus, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleSync = async () => {
-    setIsSyncing(true);
-    try {
-      const res = await fetch('/api/cache/sync', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setCloudConnected(true);
-        if (typeof data.total_in_mongo === 'number') {
-          setMongoCount(data.total_in_mongo);
-        }
-      }
-    } catch {
-      // ignore
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const handleDownload = (format: 'json' | 'csv') => {
     setShowExportMenu(false);
@@ -60,27 +19,6 @@ export function HeaderActions({ onHistoryClick, onClearClick, historyCount }: He
 
   return (
     <div className="flex items-center gap-2 relative">
-      {/* Cloud Status Badge */}
-      <button
-        type="button"
-        onClick={handleSync}
-        disabled={isSyncing}
-        title={cloudConnected ? `MongoDB Atlas: Connected (${mongoCount !== null ? mongoCount : historyCount} cached unique records). Click to re-sync.` : "MongoDB Atlas: Disconnected. Click to retry sync."}
-        className={`inline-flex items-center justify-center rounded-lg border font-medium whitespace-nowrap transition-all h-7 gap-1.5 px-2.5 text-xs ${
-          cloudConnected
-            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
-            : 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
-        }`}
-      >
-        <Cloud className="h-3.5 w-3.5" />
-        <span>{cloudConnected ? 'MongoDB Connected' : 'Connect MongoDB'}</span>
-        {isSyncing ? (
-          <RefreshCw className="h-3 w-3 animate-spin" />
-        ) : (
-          cloudConnected && <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-        )}
-      </button>
-
       {/* Export Cache Button */}
       <div className="relative">
         <button
@@ -132,18 +70,6 @@ export function HeaderActions({ onHistoryClick, onClearClick, historyCount }: He
         <History className="h-3.5 w-3.5 mr-1" />
         History
       </button>
-
-      {/* Clear Button */}
-      {historyCount > 0 && (
-        <button
-          type="button"
-          onClick={onClearClick}
-          className="inline-flex items-center justify-center rounded-lg border border-transparent font-medium whitespace-nowrap transition-all hover:bg-muted hover:text-destructive h-7 gap-1 px-2.5 text-xs text-destructive"
-        >
-          <Trash2 className="h-3.5 w-3.5 mr-1" />
-          Clear
-        </button>
-      )}
     </div>
   );
 }
