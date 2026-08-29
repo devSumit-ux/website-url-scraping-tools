@@ -400,4 +400,4 @@ async def search(request: SearchRequest):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PYTHON_SCRAPER_PORT', 8000))
-    uvicorn.run(app, host='0.0.0.0', port=port, log_level='warning', loop='asyncio', timeout_keep_alive=5)
+    uvicorn.run(app, host='0.0.0.0', port=port, log_level='info', loop='asyncio', timeout_keep_alive=5)
