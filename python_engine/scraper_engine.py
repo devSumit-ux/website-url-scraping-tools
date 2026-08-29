@@ -1025,11 +1025,17 @@ class GlobalDomainRegistry:
     Ensures that when multiple users, browser sessions, or devices search simultaneously online,
     no two users/browsers ever receive the same discovered domain or URL.
     """
-    _lock = asyncio.Lock()
+    _lock: Optional[asyncio.Lock] = None
     _in_flight_domains: Set[str] = set()
     _delivered_domains: Set[str] = set()
     _delivered_urls: Set[str] = set()
     _initialized = False
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+        return cls._lock
 
     @classmethod
     def initialize(cls):
@@ -1045,7 +1051,7 @@ class GlobalDomainRegistry:
         if not domain:
             return True
         d = domain.lower().strip()
-        async with cls._lock:
+        async with cls._get_lock():
             return (d in cls._delivered_domains or d in cls._in_flight_domains)
 
     @classmethod
@@ -1058,7 +1064,7 @@ class GlobalDomainRegistry:
         if not domain:
             return False
         d = domain.lower().strip()
-        async with cls._lock:
+        async with cls._get_lock():
             if d in cls._delivered_domains or d in cls._in_flight_domains:
                 return False
             cls._in_flight_domains.add(d)
@@ -1071,7 +1077,7 @@ class GlobalDomainRegistry:
         if not domain:
             return
         d = domain.lower().strip()
-        async with cls._lock:
+        async with cls._get_lock():
             cls._in_flight_domains.discard(d)
             cls._delivered_domains.add(d)
             if url:
@@ -1085,7 +1091,7 @@ class GlobalDomainRegistry:
         if not domain:
             return
         d = domain.lower().strip()
-        async with cls._lock:
+        async with cls._get_lock():
             cls._in_flight_domains.discard(d)
 
     @classmethod
@@ -1093,6 +1099,7 @@ class GlobalDomainRegistry:
         cls._in_flight_domains.clear()
         cls._delivered_domains.clear()
         cls._delivered_urls.clear()
+        cls._lock = None
         cls._initialized = False
 
 
