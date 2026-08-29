@@ -804,7 +804,7 @@ class HistoryLogger:
     @classmethod
     def load_history(cls, force_reload: bool = False) -> Dict[str, Set[str]]:
         now = time.time()
-        if not force_reload and cls._cached_history is not None and (now - cls._last_history_load_time < 30.0):
+        if not force_reload and cls._cached_history is not None:
             return cls._cached_history
 
         domains = set()
@@ -812,7 +812,7 @@ class HistoryLogger:
         stems = set()
         urls = set()
 
-        # 1. Load from local file if exists
+        # 1. Load instantly from local mirror file (< 1ms)
         if os.path.exists(HISTORY_FILE_PATH):
             try:
                 with open(HISTORY_FILE_PATH, 'r', encoding='utf-8') as f:
@@ -821,20 +821,6 @@ class HistoryLogger:
                     filtered = set(data.get('filtered_domains', []))
                     stems = set(data.get('stems', []))
                     urls = set(data.get('urls', []))
-            except Exception:
-                pass
-
-        # 2. Merge with MongoDB Atlas cloud cache if available
-        if MongoCacheStorage:
-            try:
-                storage = MongoCacheStorage.get_instance()
-                if storage.is_connected():
-                    mongo_domains = storage.load_approved_domains()
-                    mongo_urls = storage.load_approved_urls()
-                    if mongo_domains:
-                        domains |= mongo_domains
-                    if mongo_urls:
-                        urls |= mongo_urls
             except Exception:
                 pass
 
@@ -847,6 +833,28 @@ class HistoryLogger:
         }
         cls._cached_history = res
         cls._last_history_load_time = now
+
+        # 2. Asynchronously sync from MongoDB Atlas in background if cache is cold
+        if MongoCacheStorage and (force_reload or len(domains) == 0):
+            try:
+                import threading
+                def _bg_sync():
+                    try:
+                        storage = MongoCacheStorage.get_instance()
+                        if storage.is_connected():
+                            mongo_domains = storage.load_approved_domains()
+                            mongo_urls = storage.load_approved_urls()
+                            if mongo_domains and cls._cached_history:
+                                cls._cached_history['domains'] |= mongo_domains
+                                cls._cached_history['all_known_domains'] |= mongo_domains
+                            if mongo_urls and cls._cached_history:
+                                cls._cached_history['urls'] |= mongo_urls
+                    except Exception:
+                        pass
+                threading.Thread(target=_bg_sync, daemon=True).start()
+            except Exception:
+                pass
+
         return res
 
     @staticmethod

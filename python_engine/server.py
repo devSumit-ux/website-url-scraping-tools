@@ -59,18 +59,19 @@ async def health():
 @app.get("/history/stats")
 async def get_history_stats():
     """Return total count of historical unique scraped domains and URLs"""
-    return JSONResponse(content=HistoryLogger.get_stats())
+    stats = await asyncio.to_thread(HistoryLogger.get_stats)
+    return JSONResponse(content=stats)
 
 @app.post("/history/clear")
 async def clear_history():
     """Clear persistent history log"""
-    HistoryLogger.clear_history()
+    await asyncio.to_thread(HistoryLogger.clear_history)
     return JSONResponse(content={"status": "cleared", "total_unique": 0})
 
 @app.get("/cache/stats")
 async def get_cache_stats():
     """Return live MongoDB Atlas cloud cache and local synchronization statistics"""
-    stats = HistoryLogger.get_stats()
+    stats = await asyncio.to_thread(HistoryLogger.get_stats)
     return JSONResponse(content=stats)
 
 @app.get("/cache/export")
@@ -399,4 +400,4 @@ async def search(request: SearchRequest):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PYTHON_SCRAPER_PORT', 8000))
-    uvicorn.run(app, host='0.0.0.0', port=port, log_level='warning', loop='asyncio')
+    uvicorn.run(app, host='0.0.0.0', port=port, log_level='warning', loop='asyncio', timeout_keep_alive=5)
