@@ -981,13 +981,12 @@ class HistoryLogger:
 
     @staticmethod
     def get_stats() -> Dict:
-        history = HistoryLogger.load_history()
         stats = {
-            'total_unique_approved': len(history['domains']),
-            'total_unique': len(history['domains']),
-            'total_filtered_domains': len(history['filtered_domains']),
-            'total_known_domains': len(history['all_known_domains']),
-            'total_urls': len(history['urls']),
+            'total_unique_approved': 0,
+            'total_unique': 0,
+            'total_filtered_domains': 0,
+            'total_known_domains': 0,
+            'total_urls': 0,
             'history_file': HISTORY_FILE_PATH,
             'sessions_file': SESSIONS_LOG_FILE,
             'cloud_connected': False,
@@ -995,13 +994,28 @@ class HistoryLogger:
         }
         if MongoCacheStorage:
             try:
-                m_stats = MongoCacheStorage.get_instance().get_stats()
-                stats['cloud_connected'] = m_stats.get('cloud_connected', False)
-                stats['mongodb_approved'] = m_stats.get('total_unique_approved', 0)
-                stats['mongodb_filtered'] = m_stats.get('total_filtered_domains', 0)
-                stats['mongodb_sessions'] = m_stats.get('total_sessions', 0)
+                storage = MongoCacheStorage.get_instance()
+                if storage.is_connected():
+                    m_stats = storage.get_stats()
+                    stats['cloud_connected'] = m_stats.get('cloud_connected', False)
+                    stats['mongodb_approved'] = m_stats.get('total_unique_approved', 0)
+                    stats['mongodb_filtered'] = m_stats.get('total_filtered_domains', 0)
+                    stats['mongodb_sessions'] = m_stats.get('total_sessions', 0)
+                    stats['total_unique'] = stats['mongodb_approved']
+                    stats['total_unique_approved'] = stats['mongodb_approved']
+                    stats['total_filtered_domains'] = stats['mongodb_filtered']
+                    stats['total_known_domains'] = stats['mongodb_approved'] + stats['mongodb_filtered']
+                    stats['total_urls'] = stats['mongodb_approved']
+                    return stats
             except Exception:
                 pass
+
+        history = HistoryLogger.load_history()
+        stats['total_unique_approved'] = len(history['domains'])
+        stats['total_unique'] = len(history['domains'])
+        stats['total_filtered_domains'] = len(history['filtered_domains'])
+        stats['total_known_domains'] = len(history['all_known_domains'])
+        stats['total_urls'] = len(history['urls'])
         return stats
 
 

@@ -475,7 +475,7 @@ export default function Home() {
               <Database className="h-4 w-4 text-emerald-500 shrink-0" />
               <span>
                 <strong className="text-foreground font-semibold">
-                  {(historyStats?.mongodb_approved || historyStats?.total_unique || 0).toLocaleString()}
+                  {(historyStats?.total_unique_approved || historyStats?.mongodb_approved || historyStats?.total_unique || 0).toLocaleString()}
                 </strong> Global Verified URLs in Cloud Database
                 {cachedDelivered.length > 0 && (
                   <> · <strong className="text-foreground font-semibold">{cachedDelivered.length.toLocaleString()}</strong> in local browser</>

@@ -212,23 +212,11 @@ async def get_results(job_id: str):
         "total": len(formatted_results),
     })
 
-@app.get("/history/stats")
-async def get_history_stats():
-    """Return cumulative domain stats and log file locations"""
-    stats = HistoryLogger.get_stats()
-    return JSONResponse(content=stats)
-
 @app.get("/history/sessions")
 async def get_history_sessions(limit: int = 50):
     """Return list of recent completed search sessions"""
     sessions = HistoryLogger.get_recent_sessions(limit=limit)
     return JSONResponse(content={"sessions": sessions, "total_sessions": len(sessions)})
-
-@app.post("/history/clear")
-async def clear_history():
-    """Clear historical persistent log and sessions file"""
-    HistoryLogger.clear_history()
-    return JSONResponse(content={"status": "cleared", "timestamp": datetime.now().isoformat()})
 
 RUNNING_TASKS: Dict[str, asyncio.Task] = {}
 

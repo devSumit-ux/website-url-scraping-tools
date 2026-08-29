@@ -414,8 +414,15 @@ class MongoCacheStorage:
         except Exception as e:
             return {"error": str(e), "status": "error"}
 
+    _cached_stats: Optional[Dict[str, Any]] = None
+    _last_stats_time: float = 0.0
+
     def get_stats(self) -> Dict[str, Any]:
-        """Get live MongoDB statistics."""
+        """Get live MongoDB statistics with fast in-memory caching."""
+        now = time.time()
+        if self._cached_stats is not None and (now - self._last_stats_time < 4.0):
+            return dict(self._cached_stats)
+
         if not self.is_connected() or self._db is None:
             return {
                 "cloud_connected": False,
@@ -424,10 +431,22 @@ class MongoCacheStorage:
                 "status": "offline_fallback"
             }
         try:
-            appr_count = self._db.approved_urls.count_documents({})
-            filt_count = self._db.filtered_domains.count_documents({})
-            sess_count = self._db.search_sessions.count_documents({})
-            return {
+            try:
+                appr_count = self._db.approved_urls.estimated_document_count()
+            except Exception:
+                appr_count = self._db.approved_urls.count_documents({})
+
+            try:
+                filt_count = self._db.filtered_domains.estimated_document_count()
+            except Exception:
+                filt_count = self._db.filtered_domains.count_documents({})
+
+            try:
+                sess_count = self._db.search_sessions.estimated_document_count()
+            except Exception:
+                sess_count = self._db.search_sessions.count_documents({})
+
+            stats = {
                 "cloud_connected": True,
                 "total_unique_approved": appr_count,
                 "total_filtered_domains": filt_count,
@@ -436,6 +455,9 @@ class MongoCacheStorage:
                 "cluster": "cluster0.usvfwut.mongodb.net",
                 "status": "connected"
             }
+            MongoCacheStorage._cached_stats = stats
+            MongoCacheStorage._last_stats_time = now
+            return dict(stats)
         except Exception:
             return {
                 "cloud_connected": False,
