@@ -9,7 +9,7 @@ import os
 import json
 import asyncio
 import time
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,10 +20,18 @@ import uvicorn
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scraper_engine import ScrapingEngine, HistoryLogger, DomainValidator, GlobalDomainRegistry
-
-GlobalDomainRegistry.initialize()
+try:
+    from mongo_storage import MongoCacheStorage
+except ImportError:
+    MongoCacheStorage = None
+from fastapi.responses import JSONResponse, Response, PlainTextResponse
 
 app = FastAPI(title="WebScope Scraping Engine", version="2.0.0")
+
+@app.on_event("startup")
+async def on_startup():
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, GlobalDomainRegistry.initialize)
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,6 +71,70 @@ async def clear_history():
     """Clear persistent history log"""
     HistoryLogger.clear_history()
     return JSONResponse(content={"status": "cleared", "total_unique": 0})
+
+@app.get("/cache/stats")
+async def get_cache_stats():
+    """Return live MongoDB Atlas cloud cache and local synchronization statistics"""
+    stats = HistoryLogger.get_stats()
+    return JSONResponse(content=stats)
+
+@app.get("/cache/export")
+async def export_cache_json():
+    """Download the full unified cache (MongoDB cloud + local) as structured JSON"""
+    if MongoCacheStorage:
+        storage = MongoCacheStorage.get_instance()
+        data = storage.export_all_cache()
+    else:
+        history = HistoryLogger.load_history()
+        data = {
+            "source": "WebScope Local Cache",
+            "exported_at": datetime.utcnow().isoformat(),
+            "total_approved": len(history["domains"]),
+            "domains": sorted(list(history["domains"])),
+            "urls": sorted(list(history["urls"])),
+            "filtered_domains": sorted(list(history["filtered_domains"]))
+        }
+    
+    json_bytes = json.dumps(data, indent=2).encode('utf-8')
+    headers = {
+        "Content-Disposition": 'attachment; filename="webscope_cache_export.json"',
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    return Response(content=json_bytes, media_type="application/json", headers=headers)
+
+@app.get("/cache/export/csv")
+async def export_cache_csv():
+    """Download all approved scraped URLs with metadata as a CSV file"""
+    if MongoCacheStorage:
+        storage = MongoCacheStorage.get_instance()
+        csv_text = storage.export_csv_string()
+    else:
+        history = HistoryLogger.load_history()
+        csv_text = "domain,url\n" + "\n".join(f"{d},https://www.{d}" for d in sorted(list(history["domains"])))
+
+    headers = {
+        "Content-Disposition": 'attachment; filename="webscope_scraped_urls.csv"',
+        "Content-Type": "text/csv; charset=utf-8"
+    }
+    return Response(content=csv_text.encode('utf-8'), media_type="text/csv", headers=headers)
+
+@app.post("/cache/sync")
+async def sync_cache_to_mongo():
+    """Force synchronization from local files to MongoDB Atlas cloud database"""
+    if MongoCacheStorage:
+        storage = MongoCacheStorage.get_instance()
+        res = storage.sync_local_to_mongo()
+        return JSONResponse(content=res)
+    return JSONResponse(content={"status": "pymongo_unavailable"})
+
+@app.post("/cache/import")
+async def import_cache_json(payload: Dict[str, Any]):
+    """Import external JSON cache data into MongoDB Atlas"""
+    if MongoCacheStorage:
+        storage = MongoCacheStorage.get_instance()
+        res = storage.import_cache_data(payload)
+        return JSONResponse(content=res)
+    return JSONResponse(content={"status": "pymongo_unavailable"})
 
 @app.get("/progress/{job_id}")
 async def get_progress(job_id: str):

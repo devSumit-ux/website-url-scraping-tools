@@ -31,6 +31,11 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 
+try:
+    from mongo_storage import MongoCacheStorage
+except ImportError:
+    MongoCacheStorage = None
+
 # ==============================================================================
 # Configuration & Constants
 # ==============================================================================
@@ -791,26 +796,48 @@ class SiteChecker:
 # ==============================================================================
 
 class HistoryLogger:
-    """Manages persistent history in scraped_history.json and sessions_history.jsonl."""
+    """Manages persistent history in MongoDB Atlas cloud cache and local scraped_history.json."""
 
     @staticmethod
     def load_history() -> Dict[str, Set[str]]:
-        if not os.path.exists(HISTORY_FILE_PATH):
-            return {'domains': set(), 'filtered_domains': set(), 'all_known_domains': set(), 'stems': set(), 'urls': set()}
-        try:
-            with open(HISTORY_FILE_PATH, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                domains = set(data.get('domains', []))
-                filtered = set(data.get('filtered_domains', []))
-                return {
-                    'domains': domains,
-                    'filtered_domains': filtered,
-                    'all_known_domains': domains | filtered,
-                    'stems': set(data.get('stems', [])),
-                    'urls': set(data.get('urls', [])),
-                }
-        except Exception:
-            return {'domains': set(), 'filtered_domains': set(), 'all_known_domains': set(), 'stems': set(), 'urls': set()}
+        domains = set()
+        filtered = set()
+        stems = set()
+        urls = set()
+
+        # 1. Load from local file if exists
+        if os.path.exists(HISTORY_FILE_PATH):
+            try:
+                with open(HISTORY_FILE_PATH, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    domains = set(data.get('domains', []))
+                    filtered = set(data.get('filtered_domains', []))
+                    stems = set(data.get('stems', []))
+                    urls = set(data.get('urls', []))
+            except Exception:
+                pass
+
+        # 2. Merge with MongoDB Atlas cloud cache if available
+        if MongoCacheStorage:
+            try:
+                storage = MongoCacheStorage.get_instance()
+                if storage.is_connected():
+                    mongo_domains = storage.load_approved_domains()
+                    mongo_urls = storage.load_approved_urls()
+                    if mongo_domains:
+                        domains |= mongo_domains
+                    if mongo_urls:
+                        urls |= mongo_urls
+            except Exception:
+                pass
+
+        return {
+            'domains': domains,
+            'filtered_domains': filtered,
+            'all_known_domains': domains | filtered,
+            'stems': stems,
+            'urls': urls,
+        }
 
     @staticmethod
     def save_accepted_domain(url: str, domain: str, query: str = ""):
@@ -822,6 +849,8 @@ class HistoryLogger:
             stem = domain.split('.')[0]
             if stem:
                 history['stems'].add(stem)
+
+        # Save to local
         try:
             with open(HISTORY_FILE_PATH, 'w', encoding='utf-8') as f:
                 json.dump({
@@ -835,6 +864,19 @@ class HistoryLogger:
                 }, f, indent=2)
         except Exception:
             pass
+
+        # Save to MongoDB Atlas
+        if MongoCacheStorage:
+            try:
+                storage = MongoCacheStorage.get_instance()
+                if storage.is_connected() and domain:
+                    storage.save_approved_results([{
+                        'url': url or f"https://www.{domain}",
+                        'domain': domain,
+                        'title': domain.capitalize()
+                    }], query=query)
+            except Exception:
+                pass
 
     @staticmethod
     def save_new_results(results: List[Dict], filtered_domains: Optional[Set[str]] = None, query: Optional[str] = None, elapsed: Optional[float] = None):
@@ -870,6 +912,20 @@ class HistoryLogger:
                 }, f, indent=2)
         except Exception:
             pass
+
+        # Persist to MongoDB Atlas cloud database
+        if MongoCacheStorage:
+            try:
+                storage = MongoCacheStorage.get_instance()
+                if storage.is_connected():
+                    if results:
+                        storage.save_approved_results(results, query=query or "")
+                    if filtered_domains:
+                        storage.save_filtered_domains(filtered_domains, query=query or "")
+                    if query and results:
+                        storage.log_search_session(query, results, elapsed or 0.0)
+            except Exception:
+                pass
 
         if results and query:
             try:
@@ -916,15 +972,27 @@ class HistoryLogger:
     @staticmethod
     def get_stats() -> Dict:
         history = HistoryLogger.load_history()
-        return {
+        stats = {
             'total_unique_approved': len(history['domains']),
             'total_unique': len(history['domains']),
             'total_filtered_domains': len(history['filtered_domains']),
             'total_known_domains': len(history['all_known_domains']),
             'total_urls': len(history['urls']),
             'history_file': HISTORY_FILE_PATH,
-            'sessions_file': SESSIONS_LOG_FILE
+            'sessions_file': SESSIONS_LOG_FILE,
+            'cloud_connected': False,
+            'mongodb_cluster': 'cluster0.usvfwut.mongodb.net'
         }
+        if MongoCacheStorage:
+            try:
+                m_stats = MongoCacheStorage.get_instance().get_stats()
+                stats['cloud_connected'] = m_stats.get('cloud_connected', False)
+                stats['mongodb_approved'] = m_stats.get('total_unique_approved', 0)
+                stats['mongodb_filtered'] = m_stats.get('total_filtered_domains', 0)
+                stats['mongodb_sessions'] = m_stats.get('total_sessions', 0)
+            except Exception:
+                pass
+        return stats
 
 
 class GlobalDomainRegistry:
